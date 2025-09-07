@@ -62,8 +62,8 @@ RUN rm -rf /tmp/gromacs-${GROMACS_VERSION} /tmp/plumed-${PLUMED_VERSION}
 
 # Create a non-root user with sudo privileges
 ARG USERNAME=spal
-ARG USER_UID=1000
-ARG USER_GID=1000
+ARG USER_UID=1001
+ARG USER_GID=1001
 RUN groupadd --gid $USER_GID $USERNAME && \
     useradd --uid $USER_UID --gid $USER_GID -m $USERNAME && \
     apt-get update && apt-get install -y sudo && \
