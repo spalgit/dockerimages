@@ -34,7 +34,7 @@ RUN wget https://github.com/plumed/plumed2/releases/download/v${PLUMED_VERSION}/
     rm plumed-${PLUMED_VERSION}.tgz
 
 WORKDIR /tmp/plumed-${PLUMED_VERSION}
-RUN ./configure --prefix=/usr/local/plumed && make -j$(nproc) && make install
+RUN ./configure --enable-modules=all --prefix=/usr/local/plumed && make -j$(nproc) && make install
 
 RUN /usr/local/plumed/bin/plumed --help
 
