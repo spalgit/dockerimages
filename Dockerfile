@@ -61,19 +61,20 @@ WORKDIR /
 RUN rm -rf /tmp/gromacs-${GROMACS_VERSION} /tmp/plumed-${PLUMED_VERSION}
 
 # Create a non-root user with sudo privileges
-ARG USERNAME=spal
-ARG USER_UID=1001
-ARG USER_GID=1001
-RUN groupadd --gid $USER_GID $USERNAME && \
-    useradd --uid $USER_UID --gid $USER_GID -m $USERNAME && \
-    apt-get update && apt-get install -y sudo && \
-    echo "$USERNAME ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/$USERNAME && \
-    chmod 0440 /etc/sudoers.d/$USERNAME
 
-# Switch to the non-root user
-USER $USERNAME
-WORKDIR /home/$USERNAME
+ARG USER_ID=1001
+ARG GROUP_ID=1002
 
+# Install sudo, vim, and create group and user with exact UID/GID
+RUN apt-get update && apt-get install -y sudo vim \
+    && groupadd -g $GROUP_ID spalgroup \
+    && useradd -m -u $USER_ID -g $GROUP_ID -s /bin/bash spal \
+    && echo '%sudo ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers \
+    && usermod -aG sudo spal \
+    && rm -rf /var/lib/apt/lists/*
 
+# Switch to user spal
+USER spal
+WORKDIR /home/spal
 
-CMD ["bash", "-c", "source /usr/local/gromacs/bin/GMXRC && gmx --version"]
+CMD ["bash"]
