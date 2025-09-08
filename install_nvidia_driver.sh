@@ -21,5 +21,6 @@ curl -s -L https://nvidia.github.io/nvidia-docker/$distribution/nvidia-docker.li
 sudo apt update
 sudo apt install -y nvidia-docker2
 sudo systemctl restart docker
+chmod g+rx /home/spal
 sudo reboot
 
