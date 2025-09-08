@@ -59,3 +59,52 @@ wait
 ./run_fes_OneOPES_parallel.sh
 
 ######################################
+
+export OMP_NUM_THREADS=1
+mapdir=$(pwd)
+
+create_tpr() {
+  echo "Processing directory: $i"
+  cd "$i"
+  wdir=$(pwd)
+  echo "${wdir}"
+  echo "${mapdir}"
+  docker run --user $(id -u):$(id -g) --rm --gpus all -it \
+    -v ${mapdir}:${mapdir} \
+    -w ${wdir} \
+    --cpus=1.0 \
+    --memory=2g \
+    --gpus '"device=0"' \
+    gcr.io/cheminfosolutions-prod-02/gromacs-plumed:2024-3_AND_2-9-3 \
+    bash -c "source /usr/local/gromacs/bin/GMXRC && gmx_mpi grompp -f ../md.mdp -c ../config.gro -p ../topol.top -o topol2.tpr"
+}
+
+array=($(seq 0 7))
+
+# Run all create_tpr jobs in background and capture their PIDs
+pids=()
+for i in "${array[@]}"
+do
+  create_tpr &
+  pids+=($!)
+done
+
+# Wait for all create_tpr jobs to finish
+for pid in "${pids[@]}"
+do
+  wait $pid
+done
+
+# Confirm all containers exited and resources freed before continuing
+echo "All grompp jobs completed. Proceeding to mpirun job."
+
+# Run the mpirun job with resource limits
+docker run --user $(id -u):$(id -g) --rm --gpus all -dit \
+  -v ${mapdir}:${mapdir} \
+  -w ${mapdir} \
+  -e OMP_NUM_THREADS=1 \
+  --cpus=4.0 \
+  --memory=8g \
+  --gpus '"device=0"' \
+  gcr.io/cheminfosolutions-prod-02/gromacs-plumed:2024-3_AND_2-9-3 \
+  bash -c "source /usr/local/gromacs/bin/GMXRC && export OMP_NUM_THREADS=1 && mpirun --map-by :OVERSUBSCRIBE -n 8 gmx_mpi mdrun -s topol2.tpr -plumed plumed.dat -pin on -pinoffset 0 -nsteps 25000000 -multidir 0 1 2 3 4 5 6 7 -hrex -replex 10000"
