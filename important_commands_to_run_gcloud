@@ -13,4 +13,21 @@ solutions-prod-02
 
 srun --partition=gpul4 --gres=gpu:1 --time=01:00:00 --pty bash
 
+# To sumbmit dockerimages to the repository
+
+gcloud auth login
+gcloud config set project PROJECT_ID
+
+gcloud auth configure-docker
+docker tag gromacs-plumed:20224-3_2-9-3 gcr.io/PROJECT_ID/gromacs-plumed:20224-3_2-9-3
+docker push gcr.io/PROJECT_ID/gromacs-plumed:20224-3_2-9-3
+
+
+# To safely stop a docker container
+
+docker ps
+docker stop <IMAGEID>
+docker rmi -f <IMAGEID> 
+
+
 
