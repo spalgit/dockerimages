@@ -1,0 +1,20 @@
+//To run docker 
+
+docker run --user $(id -u):$(id -g) -v --rm --gpus all -it -v /home/spal:/home/spal gromacs-plumed:2024-3_AND_2-9-3 bash
+
+
+//To run gromacs in the detached mode use
+
+
+docker run --user $(id -u):$(id -g) --rm --gpus all -dit -v /home/spal/gromacs_md_files:/home/spal/gromacs_md_files -w /home/spal/gromacs_md_files gromacs-plumed:2024-3_AND_2-9-3 bash  -c "source /usr/local/gromacs/bin/GMXRC && gmx_mpi mdrun -deffnm npt"
+
+
+// To create a tpr file form outsude the docker container
+
+docker run --user $(id -u):$(id -g) --rm --gpus all -it -v /home/spal/gromacs_md_files:/home/spal/gromacs_md_files -w /home/spal/gromacs_md_files gromacs-plumed:2024-3_AND_2-9-3 bash  -c "source /usr/local/gromacs/bin/GMXRC && gmx_mpi grompp -f inputs/md.mdp -c npt.gro -t npt.cpt -p topol.top -o md_0_10.tpr -maxwarn 1"
+
+
+
+
+
+
