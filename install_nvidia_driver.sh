@@ -1,6 +1,7 @@
 #!/bin/sh
 
 sudo apt update
+sudo apt-get update && sudo apt-get install -y build-essential
 sudo apt install -y git
 sudo apt install -y docker.io
 sudo systemctl start docker
@@ -26,6 +27,13 @@ bash Miniconda3-latest-Linux-x86_64.sh
 source ~/miniconda3/bin/activate
 conda init
 conda create --name my_pmx python=3.9
+conda activate my_pmx
+conda install conda-forge::acpype
+pip install ipython
+conda install conda-forge::rdkit
+git clone git@github.com:spalgit/pmx_scripts.git
+cd pmx_scripts
+pip install .
 chmod g+rx /home/spal
 sudo reboot
 
