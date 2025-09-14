@@ -37,5 +37,8 @@ docker ps
 docker stop <IMAGEID>
 docker rmi -f <IMAGEID> 
 
+# 
+
+docker build -t image_name:tag .
 
 
