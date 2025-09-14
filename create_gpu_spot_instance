@@ -12,3 +12,19 @@ gcloud compute instances create vm-gpu \
   --scopes=https://www.googleapis.com/auth/cloud-platform \
   --boot-disk-size=100GB \
   --boot-disk-type=pd-ssd
+
+
+gcloud compute instances create vm-gpu \
+  --zone=us-central1-a \
+  --machine-type=n1-standard-2 \
+  --accelerator=type=nvidia-tesla-t4,count=1 \
+  --preemptible \
+  --maintenance-policy=TERMINATE \
+  --restart-on-failure \
+  --image-family=ubuntu-2204-lts \
+  --image-project=ubuntu-os-cloud \
+  --network=cheminfosolutions-cluster-vpc-net \
+  --subnet=cheminfosolutions-cluster-vpc-primary-subnet \
+  --scopes=https://www.googleapis.com/auth/cloud-platform \
+  --boot-disk-size=100GB \
+  --boot-disk-type=pd-ssd
