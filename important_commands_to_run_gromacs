@@ -106,3 +106,47 @@ for i in $(seq 0 $((JOBS-1))); do
 done
 
 wait
+
+
+#################
+
+#!/bin/bash
+
+GMX_IMG="gromacs_4gpus:2024-3"
+TPR="tpr_water_eq.tpr"    # adjust path as needed
+JOBS=20
+GPUS=4
+VCPUS=96
+#THREADS_PER_JOB=$((VCPUS / JOBS))    # 4 cpu threads/job
+THREADS_PER_JOB=2   # 4 cpu threads/job
+
+
+for i in $(seq 0 $((JOBS-1))); do
+  GPU_IDX=$((i % GPUS))
+  echo $GPU_IDX
+  OUTDIR="/home/spal/md_$i"
+  mkdir -p $OUTDIR
+  cp /home/spal/gromacs_md_files/tpr_water_eq.tpr $OUTDIR/
+
+  echo  docker run --rm --user $(id -u):$(id -g) \
+  --gpus device=$GPU_IDX -dit \
+  -v $OUTDIR:$OUTDIR \
+  -w $OUTDIR \
+  -e OMP_NUM_THREADS=$THREADS_PER_JOB \
+  -e CUDA_VISIBLE_DEVICES=$GPU_IDX \
+  $GMX_IMG \
+  bash -c "gmx mdrun -s $TPR -deffnm md -ntomp 2 -gpu_id $GPU_IDX > output.log 2>&1"
+
+  docker run --rm --user $(id -u):$(id -g) \
+  --gpus device=$GPU_IDX -dit \
+  -v $OUTDIR:$OUTDIR \
+  -w $OUTDIR \
+  -e OMP_NUM_THREADS=$THREADS_PER_JOB \
+  -e CUDA_VISIBLE_DEVICES=$GPU_IDX \
+  $GMX_IMG \
+  bash -c "gmx mdrun -s $TPR -deffnm md -ntomp 2 -gpu_id $GPU_IDX > output.log 2>&1"
+#  bash -c "mpirun -np 4 gmx_mpi mdrun -s $TPR -deffnm md_run -ntomp 6 -npme 1 -pin on > output.log 2>&1"
+#  bash -c "gmx mdrun -s $TPR -deffnm md_run -ntmpi 4 -ntomp 4 -rcon 0.9 -pin on"
+done
+
+wait
