@@ -2,7 +2,7 @@ gcloud auth login
 
 gcloud auth application-default login
 
-gcloud compute ssh --project=cheminfosolutions-prod-02 --zone=us-central1-a allcluster-slurm-login-001 --tunnel-through-iap
+gcloud compute ssh --project=cheminfosolutions-prod-02 --zone=us-central1-a vm-gpu --tunnel-through-iap
 
 gcloud compute scp Untitled.ipynb hpcslurm-slurm-login-001:/home/sandeep_cheminfosolutions_co_uk --tunnel-through-iap --project=cheminfosolutions-prod-01
 
