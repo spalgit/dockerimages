@@ -1,3 +1,5 @@
+gcloud compute machine-types list --filter="name=g2-standard-32"
+
 gcloud compute instances create vm-gpu \
   --zone=us-central1-a \
   --machine-type=g2-standard-16 \
