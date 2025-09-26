@@ -13,7 +13,9 @@ docker run --user $(id -u):$(id -g) --rm --gpus all -dit -v /home/spal/gromacs_m
 
 docker run --user $(id -u):$(id -g) --rm --gpus all -it -v /home/spal/gromacs_md_files:/home/spal/gromacs_md_files -w /home/spal/gromacs_md_files gromacs-plumed:2024-3_AND_2-9-3 bash  -c "source /usr/local/gromacs/bin/GMXRC && gmx_mpi grompp -f inputs/md.mdp -c npt.gro -t npt.cpt -p topol.top -o md_0_10.tpr -maxwarn 1"
 
+###########
 
+docker run --user $(id -u):$(id -g) --rm --gpus all -dit   -v ${mapdir}:${mapdir}   -w ${mapdir}   -e OMP_NUM_THREADS=1   gcr.io/cheminfosolutions-prod-02/gromacs-plumed:2024-3_AND_2-9-3   bash -c "source /usr/local/gromacs/bin/GMXRC && export OMP_NUM_THREADS=2 && mpirun -n 4 gmx_mpi mdrun -multidir /home/spal/dockerimages/pmx_scripts/tutorials/workpath_p38/edge_p38a_2u_p38a_2q/water/stateA/run1/eq /home/spal/dockerimages/pmx_scripts/tutorials/workpath_p38/edge_p38a_2u_p38a_2q/protein/stateA/run1/eq /home/spal/dockerimages/pmx_scripts/tutorials/workpath_p38/edge_p38a_2u_p38a_2q/water/stateB/run1/eq /home/spal/dockerimages/pmx_scripts/tutorials/workpath_p38/edge_p38a_2u_p38a_2q/protein/stateB/run1/eq -pin on -pinoffset 0 -s tpr.tpr"
 
 
 ###############################################################
