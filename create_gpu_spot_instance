@@ -1,5 +1,23 @@
 gcloud compute machine-types list --filter="name=g2-standard-32"
 
+gcloud compute instances create vm-gpu-3-# \
+  --zone=europe-west4-c \
+  --machine-type=g2-standard-32 \
+  --accelerator=type=nvidia-l4,count=1 \
+  --preemptible \
+  --maintenance-policy=TERMINATE \
+  --restart-on-failure \
+  --image-family=ubuntu-2204-lts \
+  --image-project=ubuntu-os-cloud \
+  --network=cheminfosolutions-euw-vpc-net \
+  --subnet=cheminfosolutions-euw-vpc-primary-subnet \
+  --scopes=https://www.googleapis.com/auth/cloud-platform \
+  --boot-disk-size=100GB \
+  --boot-disk-type=pd-ssd \
+  --count=2
+
+
+
 gcloud compute instances create vm-gpu \
   --zone=us-central1-a \
   --machine-type=g2-standard-16 \
