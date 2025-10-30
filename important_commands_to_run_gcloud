@@ -23,6 +23,11 @@ docker tag gromacs-plumed:20224-3_2-9-3 gcr.io/PROJECT_ID/gromacs-plumed:20224-3
 docker push gcr.io/PROJECT_ID/gromacs-plumed:20224-3_2-9-3
 
 
+
+docker pull ghcr.io/openfreeenergy/openfe:1.7.0
+
+
+
 # To pull the images
 
 gcloud auth configure-docker
