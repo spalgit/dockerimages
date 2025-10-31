@@ -34,6 +34,19 @@ conda install conda-forge::rdkit
 git clone git@github.com:spalgit/pmx_scripts.git
 cd pmx_scripts
 pip install .
+
+# Download and install Miniforge (which includes mamba)
+curl -LO https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Linux-x86_64.sh
+bash Miniforge3-Linux-x86_64.sh -b -p $HOME/miniforge3
+# Initialize conda/mamba shell environment
+. "$HOME/miniforge3/etc/profile.d/conda.sh"
+conda activate base
+
+# Now create your environment using mamba
+mamba create -n openfe_env openfe=1.7.0 -y
+# Activate the environment
+conda activate openfe_env
+
 chmod g+rx /home/spal
 sudo reboot
 
