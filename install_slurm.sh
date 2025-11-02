@@ -10,13 +10,13 @@ if ! id -u slurm >/dev/null 2>&1; then
     sudo useradd -m slurm
 fi
 
-# Setup munge key (generate only if it does not exist)
+# Setup munge key if missing
 if [ ! -f /etc/munge/munge.key ]; then
-    sudo mungekey
+    sudo /usr/sbin/mungekey --force
 else
     echo "munge key already exists, skipping generation."
 fi
-sudo chown -R munge: /etc/munge/munge.key
+sudo chown munge:munge /etc/munge/munge.key
 sudo chmod 400 /etc/munge/munge.key
 
 # Enable and start munge service
@@ -24,10 +24,23 @@ sudo systemctl enable munge
 sudo systemctl start munge
 
 # Prepare slurm directories
-sudo mkdir -p /var/spool/slurmctld /var/log/slurm /var/spool/slurmd
-sudo chown slurm: /var/spool/slurmctld /var/log/slurm /var/spool/slurmd
+#sudo mkdir -p /var/spool/slurmctld /var/log/slurm /var/spool/slurmd /usr/lib/x86_64-linux-gnu/slurm-wlm
+#sudo chown slurm: /var/spool/slurmctld /var/log/slurm /var/spool/slurmd
 
-# Create slurm.conf with GPU config
+sudo apt update -y
+sudo apt install slurmd slurmctld -y
+sudo mkdir /etc/slurm-llnl/
+sudo chmod 777 /etc/slurm-llnl
+sudo mkdir /var/lib/slurm-llnl/
+sudo mkdir /var/log/slurm-llnl/
+sudo chmod 777 /var/lib/slurm-llnl/
+sudo chmod 777 /var/log/slurm-llnl/
+
+
+# Create SLURM config directory if it doesn't exist
+sudo ln -s /etc/slurm-llnl/slurm.conf /etc/slurm/slurm.conf
+
+# Generate slurm.conf (single node, GPU-enabled)
 SLURM_CONF="/etc/slurm-llnl/slurm.conf"
 sudo tee $SLURM_CONF > /dev/null << EOF
 ClusterName=single-node
@@ -55,13 +68,15 @@ NodeName=localhost CPUs=4 Gres=gpu:$(nvidia-smi --list-gpus | wc -l) State=UNKNO
 PartitionName=debug Nodes=localhost Default=YES MaxTime=INFINITE State=UP
 EOF
 
+
 sudo chown slurm: $SLURM_CONF
 sudo chmod 644 $SLURM_CONF
 
-# Create gres.conf describing GPU devices
+# Generate gres.conf for GPU resources (assumes Tesla, adjust as needed)
 GRES_CONF="/etc/slurm-llnl/gres.conf"
+gpu_count=$(nvidia-smi --list-gpus | wc -l)
 sudo tee $GRES_CONF > /dev/null << EOF
-Name=gpu Type=tesla File=/dev/nvidia0
+$(for i in $(seq 0 $((gpu_count-1))); do echo "Name=gpu Type=tesla File=/dev/nvidia$i"; done)
 EOF
 
 sudo chown slurm: $GRES_CONF
@@ -73,3 +88,4 @@ sudo systemctl enable slurmd
 sudo systemctl start slurmctld
 sudo systemctl start slurmd
 
+sudo service slurmctld restart && sudo service slurmd restart
