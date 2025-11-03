@@ -102,8 +102,11 @@ sudo chmod 644 $SLURM_CONF
 # Generate gres.conf for GPU resources (assumes Tesla, adjust as needed)
 GRES_CONF="/etc/slurm-llnl/gres.conf"
 gpu_count=$(nvidia-smi --list-gpus | wc -l)
+gpu_model=$(nvidia-smi --query-gpu=name --format=csv,noheader | head -n 1 | tr -dc '[:alnum:]')
+gpu_model_clean=$(echo "$gpu_model" | tr -cd '[:alnum:]')
+
 sudo tee $GRES_CONF > /dev/null << EOF
-$(for i in $(seq 0 $((gpu_count-1))); do echo "Name=gpu Type=tesla File=/dev/nvidia$i"; done)
+$(for i in $(seq 0 $((gpu_count-1))); do echo "Name=gpu Type=$gpu_model_clean File=/dev/nvidia$i"; done)
 EOF
 
 sudo chown slurm: $GRES_CONF
