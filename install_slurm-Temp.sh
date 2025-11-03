@@ -116,3 +116,4 @@ sudo systemctl start slurmctld
 sudo systemctl start slurmd
 
 sudo service slurmctld restart && sudo service slurmd restart
+#sudo scontrol update NodeName=localhost State=RESUME
