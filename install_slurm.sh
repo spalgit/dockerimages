@@ -24,8 +24,8 @@ sudo systemctl enable munge
 sudo systemctl start munge
 
 # Prepare slurm directories
-#sudo mkdir -p /var/spool/slurmctld /var/log/slurm /var/spool/slurmd /usr/lib/x86_64-linux-gnu/slurm-wlm
-#sudo chown slurm: /var/spool/slurmctld /var/log/slurm /var/spool/slurmd
+sudo mkdir -p /var/spool/slurmctld /var/log/slurm /var/spool/slurmd /usr/lib/x86_64-linux-gnu/slurm-wlm
+sudo chown slurm: /var/spool/slurmctld /var/log/slurm /var/spool/slurmd
 
 sudo apt update -y
 sudo apt install slurmd slurmctld -y
@@ -43,29 +43,48 @@ sudo ln -s /etc/slurm-llnl/slurm.conf /etc/slurm/slurm.conf
 # Generate slurm.conf (single node, GPU-enabled)
 SLURM_CONF="/etc/slurm-llnl/slurm.conf"
 sudo tee $SLURM_CONF > /dev/null << EOF
-ClusterName=single-node
-ControlMachine=localhost
-SlurmUser=slurm
-SlurmctldPort=6817
-SlurmdPort=6818
-AuthType=auth/munge
-StateSaveLocation=/var/spool/slurmctld
-SlurmdSpoolDir=/var/spool/slurmd
-SwitchType=switch/none
+ClusterName=localcluster
+SlurmctldHost=localhost
 MpiDefault=none
-SlurmctldPidFile=/var/run/slurmctld.pid
-SlurmdPidFile=/var/run/slurmd.pid
-ProctrackType=proctrack/pgid
-PluginDir=/usr/lib/x86_64-linux-gnu/slurm-wlm
+ProctrackType=proctrack/linuxproc
 ReturnToService=2
+SlurmctldPidFile=/var/run/slurmctld.pid
+SlurmctldPort=6817
+SlurmdPidFile=/var/run/slurmd.pid
+SlurmdPort=6818
+SlurmdSpoolDir=/var/lib/slurm-llnl/slurmd
+SlurmUser=slurm
+StateSaveLocation=/var/lib/slurm-llnl/slurmctld
+SwitchType=switch/none
+TaskPlugin=task/none
+#
+# TIMERS
+InactiveLimit=0
+KillWait=30
+MinJobAge=300
+SlurmctldTimeout=120
+SlurmdTimeout=300
+Waittime=0
+# SCHEDULING
+SchedulerType=sched/backfill
+SelectType=select/cons_tres
+SelectTypeParameters=CR_Core
+#
+#AccountingStoragePort=
+AccountingStorageType=accounting_storage/none
+JobCompType=jobcomp/none
+JobAcctGatherFrequency=30
+JobAcctGatherType=jobacct_gather/none
 SlurmctldDebug=info
+SlurmctldLogFile=/var/log/slurm-llnl/slurmctld.log
 SlurmdDebug=info
-SlurmctldLogFile=/var/log/slurm/slurmctld.log
-SlurmdLogFile=/var/log/slurm/slurmd.log
+SlurmdLogFile=/var/log/slurm-llnl/slurmd.log
+#
+# COMPUTE NODES
+NodeName=localhost CPUs=2 Boards=1 Sockets=1 CoresPerSocket=2 ThreadsPerCore=2 RealMemory=7400
+PartitionName=LocalQ Nodes=ALL Default=YES MaxTime=INFINITE State=UP
 
 GresTypes=gpu
-NodeName=localhost CPUs=4 Gres=gpu:$(nvidia-smi --list-gpus | wc -l) State=UNKNOWN
-PartitionName=debug Nodes=localhost Default=YES MaxTime=INFINITE State=UP
 EOF
 
 
