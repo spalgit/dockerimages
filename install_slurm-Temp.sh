@@ -120,3 +120,4 @@ sudo systemctl start slurmd
 
 sudo service slurmctld restart && sudo service slurmd restart
 #sudo scontrol update NodeName=localhost State=RESUME
+#scontrol show node vm-gpu
