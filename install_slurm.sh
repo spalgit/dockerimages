@@ -26,7 +26,7 @@ gpu_count=$(nvidia-smi --list-gpus | wc -l)
 
 
 # Create SLURM config directory if it doesn't exist
-#sudo ln -s /etc/slurm-llnl/slurm.conf /etc/slurm/slurm.conf
+sudo ln -s /etc/slurm-llnl/slurm.conf /etc/slurm/slurm.conf
 
 # Generate slurm.conf (single node, GPU-enabled)
 SLURM_CONF="/etc/slurm-llnl/slurm.conf"
