@@ -21,32 +21,6 @@ curl -s -L https://nvidia.github.io/nvidia-docker/gpgkey | sudo apt-key add -
 curl -s -L https://nvidia.github.io/nvidia-docker/$distribution/nvidia-docker.list | sudo tee /etc/apt/sources.list.d/nvidia-docker.list
 sudo apt update
 sudo apt install -y nvidia-docker2
-sudo systemctl restart docker
-wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh
-bash Miniconda3-latest-Linux-x86_64.sh
-source ~/miniconda3/bin/activate
-conda init
-conda create --name my_pmx python=3.9
-conda activate my_pmx
-conda install conda-forge::acpype
-pip install ipython
-conda install conda-forge::rdkit
-git clone git@github.com:spalgit/pmx_scripts.git
-cd pmx_scripts
-pip install .
-
-# Download and install Miniforge (which includes mamba)
-curl -LO https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Linux-x86_64.sh
-bash Miniforge3-Linux-x86_64.sh -b -p $HOME/miniforge3
-# Initialize conda/mamba shell environment
-. "$HOME/miniforge3/etc/profile.d/conda.sh"
-conda activate base
-
-# Now create your environment using mamba
-mamba create -n openfe_env openfe=1.7.0 -y
-# Activate the environment
-conda activate openfe_env
-
 chmod g+rx /home/spal
 sudo reboot
 
