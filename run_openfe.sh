@@ -1,8 +1,6 @@
 #!/bin/sh
 # Automatic run of openfe
-# 1. sdf file with ligands docked
-# 2. PDB file with protein
-# 3. edges file which the user wants
+# ONLY USE IT WITH MACHINES WITH 2 GPUs and slurm installed 
 
 source ~/.bashrc
 conda activate /home/spal/miniforge3/envs/openfe_env
@@ -30,7 +28,7 @@ for ((i=0; i<${#files[@]}; i+=4)); do
 #SBATCH --error=results/batch_$((i/4)).err
 
 source ~/.bashrc
-conda activate openfe_env
+conda activate /home/spal/miniforge3/envs/openfe_env 
 
 " > "$jobpath"
 
@@ -42,7 +40,13 @@ conda activate openfe_env
     dirpath=${relpath%.json}
     outdir="results/$dirpath"
 
-    echo "CUDA_VISIBLE_DEVICES=$gpu_id openfe quickrun $input_file -o $outdir -d $outdir &" >> "$jobpath"
+    echo "relpath =" $relpath
+    echo "input_file = "$input_file
+    echo "gpu_id = " $gpu_id
+    echo "outdir = " $outdir
+    echo "jobpath = " $jobpath
+
+    echo "CUDA_VISIBLE_DEVICES=$gpu_id openfe quickrun $input_file -o $relpath -d $outdir &" >> "$jobpath"
   done
 
   echo "wait" >> "$jobpath"
