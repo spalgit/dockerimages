@@ -1,15 +1,16 @@
 #!/bin/sh
-# Automatic run of openfe with input files passed as arguments
+# Automatic run of openfe
+# ONLY USE IT WITH MACHINES WITH 2 GPUs and slurm installed
 
-source ~/.bashrc
+#source ~/.bashrc
 conda activate /home/spal/miniforge3/envs/openfe_env
 
 # Read input arguments
-pdb="$1"
-sdf="$2"
+pdb_file="$1"
+sdf_file="$2"
 edge="$3"
 
-if [ -z "$pdb_file" ] || [ -z "$sdf_file" ] || [ -z "$edge_file" ]; then
+if [ -z "$pdb_file" ] || [ -z "$sdf_file" ] || [ -z "$edge" ]; then
   echo "Usage: $0 <pdb_file> <sdf_file> <edge_file>"
   exit 1
 fi
@@ -19,8 +20,6 @@ echo "Using SDF file: $sdf_file"
 echo "Using edge file: $edge"
 
 edge_file=${PWD}/$edge
-sdf_file=$sdf
-pdb_file=$pdb
 
 
 cat <<EOF >| create_network.py
@@ -48,7 +47,7 @@ ligand_network = network_planner(
         )
 
 solvent = openfe.SolventComponent()
-protein = openfe.ProteinComponent.from_pdb_file("$pdb_file")
+protein = openfe.ProteinComponent.from_pdb_file('$pdb_file')
 
 transformations = []
 
@@ -135,7 +134,7 @@ for ((i=0; i<${#files[@]}; i+=4)); do
 #SBATCH --partition=LocalQ
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=32G
-#SBATCH --gres=gpu:2
+#SBATCH --gres=gpu:1
 #SBATCH --output=results/batch_$((i/4)).out
 #SBATCH --error=results/batch_$((i/4)).err
 
@@ -155,7 +154,7 @@ conda activate /home/spal/miniforge3/envs/openfe_env
 
   echo "wait" >> "$jobpath"
 
-#  sbatch "$jobpath"
+  sbatch "$jobpath"
   job_count=$((job_count + 1))
 
   if [[ $job_count -ge max_jobs ]]; then
