@@ -149,12 +149,14 @@ conda activate /home/spal/miniforge3/envs/openfe_env
     dirpath=${relpath%.json}
     outdir="results/$dirpath"
 
-    echo "CUDA_VISIBLE_DEVICES=$gpu_id openfe quickrun $input_file -o $relpath -d $outdir &" >> "$jobpath"
+    echo $relpath
+
+    echo "CUDA_VISIBLE_DEVICES=$gpu_id openfe quickrun $input_file -o results/$relpath -d $outdir &" >> "$jobpath"
   done
 
   echo "wait" >> "$jobpath"
 
-  sbatch "$jobpath"
+#  sbatch "$jobpath"
   job_count=$((job_count + 1))
 
   if [[ $job_count -ge max_jobs ]]; then
