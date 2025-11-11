@@ -43,7 +43,7 @@ bash Miniforge3-Linux-x86_64.sh -b -p $HOME/miniforge3
 conda activate base
 
 # Now create your environment using mamba
-mamba create -n openfe_env openfe=1.7.0 -y
+mamba create -n openfe_env -c conda-forge openfe=1.7.0 espaloma_charge openff-toolkit  -y
 # Activate the environment
 conda activate openfe_env
 
