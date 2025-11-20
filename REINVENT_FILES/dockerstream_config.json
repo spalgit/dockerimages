@@ -1,0 +1,64 @@
+{
+  "docking": {
+    "header": {
+      "logging": {
+        "logfile": "ADV_docking.log"
+      }
+    },
+    "ligand_preparation": {
+      "embedding_pools": [
+        {
+          "pool_id": "RDkit",
+          "type": "RDkit",
+          "parameters": {
+            "prefix_execution": ""
+          },
+          "input": {
+            "standardize_smiles": false,
+            "type": "console"
+          },
+          "output": {
+            "conformer_path": "/home/spal/REINVENT4/AutodockVina/ADV_embedded_ligands.sdf",
+            "format": "sdf"
+          }
+        }
+      ]
+    },
+    "docking_runs": [
+      {
+        "backend": "AutoDockVina",
+        "run_id": "AutoDockVina",
+        "input_pools": [
+          "RDkit"
+        ],
+        "parameters": {
+          "binary_location": "/home/spal/autodock_vina_1_1_2_linux_x86/bin/",
+          "parallelization": {
+            "number_cores": 8
+          },
+          "seed": 42,
+          "receptor_pdbqt_path": [
+            "/home/spal/Recludix/STAT6/Allosteric/Proteins_prepared/STAT6-pOST478-REX-011441-223A_refine_6_prep_rec.pdbqt"
+          ],
+          "number_poses": 2,
+          "search_space": {
+            "--center_x": 3.611,  
+            "--center_y": -27.075,
+            "--center_z": 17.510,
+            "--size_x": 15,
+            "--size_y": 10,
+            "--size_z": 10
+          }
+        },
+        "output": {
+          "poses": {
+            "poses_path": "ADV_ligands_docked.sdf"
+          },
+          "scores": {
+            "scores_path": "ADV_scores.csv"
+          }
+        }
+      }
+    ]
+  }
+}
