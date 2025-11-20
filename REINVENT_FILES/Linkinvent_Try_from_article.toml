@@ -1,0 +1,142 @@
+
+run_type = "staged_learning"
+device = "cuda:0"
+tb_logdir = "tb_stage1"
+json_out_config = "SL_input.json"
+
+[parameters]
+
+prior_file = "/home/spal/REINVENT4/Link-INVENT_demo/linkinvent.prior"
+agent_file = "/home/spal/REINVENT4/Link-INVENT_demo/linkinvent.prior"
+smiles_file = "/home/spal/REINVENT4/use_StreamLit/linkinvent_smiles.smi"
+summary_csv_prefix = "stage1"
+
+batch_size = 128
+
+use_checkpoint = false
+
+[inception]
+smiles_file = "inception_smiles.smi"
+memory_size = 100
+sample_size = 80
+
+[learning_strategy]
+
+type = "dap"
+sigma = 128
+rate = 0.0001
+
+[diversity_filter]
+
+type = "IdenticalMurckoScaffold"
+bucket_size = 25
+minscore = 0.4
+
+[[stage]]
+chkpt_file = "SL_calc_S1.chkpt"
+max_score = 0.6
+max_steps = 500
+
+# Scoring Components (S1)
+[stage.scoring]
+type = "geometric_mean"
+parallel = true
+
+# FragmentHBondAcceptors: Fragment number of hydrogen bond acceptors (RDKit)
+
+[[stage.scoring.component]]
+[stage.scoring.component.FragmentHBondAcceptors]
+[[stage.scoring.component.FragmentHBondAcceptors.endpoint]]
+name = "H_bond_acceptors"
+weight = 1.00
+transform.type = "Step"
+transform.high = 2.0
+transform.low = 0.0
+
+# FragmentNumAromaticRings: Fragment number of aromatic rings (RDKit)
+
+[[stage.scoring.component]]
+[stage.scoring.component.FragmentNumAromaticRings]
+[[stage.scoring.component.FragmentNumAromaticRings.endpoint]]
+name = "NumAromaticRings"
+weight = 1.00
+transform.type = "Step"
+transform.high = 2.0
+transform.low = 1.0
+
+# FragmentNumRotBond: Fragment number of rotatable bonds (RDKit)
+
+[[stage.scoring.component]]
+[stage.scoring.component.FragmentNumRotBond]
+[[stage.scoring.component.FragmentNumRotBond.endpoint]]
+name = "NumRotBonds"
+weight = 1.00
+transform.type = "Step"
+transform.high = 2.0
+transform.low = 1.0
+
+[[stage.scoring.component]]
+[stage.scoring.component.QED]
+[[stage.scoring.component.QED.endpoint]]
+name = "QED"
+weight = 0.6
+transform.type = "left_step"
+transform.low = 0
+
+[[stage]]
+
+max_score = 1.0
+max_steps = 3000
+
+chkpt_file = 'stage1.chkpt'
+
+[stage.scoring]
+type = "geometric_mean"
+
+[[stage.scoring.component]]
+[stage.scoring.component.custom_alerts]
+
+[[stage.scoring.component.custom_alerts.endpoint]]
+name = "Alerts"
+
+params.smarts = [
+    "[*;r8]",
+    "[*;r9]",
+    "[*;r10]",
+    "[*;r11]",
+    "[*;r12]",
+    "[*;r13]",
+    "[*;r14]",
+    "[*;r15]",
+    "[*;r16]",
+    "[*;r17]",
+    "[#8][#8]",
+    "[#6;+]",
+    "[#16][#16]",
+    "[#7;!n][S;!$(S(=O)=O)]",
+    "[#7;!n][#7;!n]",
+    "C#C",
+    "C(=[O,S])[O,S]",
+    "[#7;!n][C;!$(C(=[O,N])[N,O])][#16;!s]",
+    "[#7;!n][C;!$(C(=[O,N])[N,O])][#7;!n]",
+    "[#7;!n][C;!$(C(=[O,N])[N,O])][#8;!o]",
+    "[#8;!o][C;!$(C(=[O,N])[N,O])][#16;!s]",
+    "[#8;!o][C;!$(C(=[O,N])[N,O])][#8;!o]",
+    "[#16;!s][C;!$(C(=[O,N])[N,O])][#16;!s]"
+]
+
+[[stage.scoring.component]]
+[stage.scoring.component.QED]
+[[stage.scoring.component.QED.endpoint]]
+name = "QED"
+weight = 0.6
+
+
+[[stage.scoring.component]]
+[stage.scoring.component.NumAtomStereoCenters]
+[[stage.scoring.component.NumAtomStereoCenters.endpoint]]
+name = "Stereo"
+weight = 0.4
+
+transform.type = "left_step"
+transform.low = 0
