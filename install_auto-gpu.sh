@@ -23,7 +23,7 @@ export PATH=/usr/local/cuda/bin:$PATH
 export LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH
 
 # Verify CUDA installation
-#nvcc --version
+nvcc --version
 
 # Install AutoDock-GPU dependencies
 sudo apt install -y ocl-icd-opencl-dev ocl-icd-libopencl1 opencl-headers
@@ -35,6 +35,9 @@ if [ ! -d "AutoDock-GPU" ]; then
 fi
 cd AutoDock-GPU
 
+export GPU_INCLUDE_PATH=/usr/local/cuda/include
+export GPU_LIBRARY_PATH=/usr/local/cuda/lib64
+
 # Build AutoDock-GPU (default make will use CUDA if available)
 make DEVICE=CUDA NUMWI=128
 
@@ -42,20 +45,20 @@ make DEVICE=CUDA NUMWI=128
 ls -l bin/
 
 # Install Miniconda if not installed
-if ! command -v conda &> /dev/null; then
-  echo "Miniconda not found, installing..."
-  wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O ~/miniconda.sh
-  bash ~/miniconda.sh -b -p $HOME/miniconda
-  eval "$($HOME/miniconda/bin/conda shell.bash hook)"
-  conda init
-fi
+#if ! command -v conda &> /dev/null; then
+#  echo "Miniconda not found, installing..."
+#  wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O ~/miniconda.sh
+#  bash ~/miniconda.sh -b -p $HOME/miniconda
+#  eval "$($HOME/miniconda/bin/conda shell.bash hook)"
+#  conda init
+#fi
 
 # Create or activate environment for Meeko
-conda create -n meeko_env python=3.9 -y
-conda activate meeko_env
+#conda create -n meeko_env python=3.9 -y
+#conda activate meeko_env
 
 # Install Meeko from conda-forge channel
-conda install -c conda-forge meeko -y
+#conda install -c conda-forge meeko -y
 
-echo "Installation complete. Remember to source ~/.bashrc or re-login to refresh environment variables."
+#echo "Installation complete. Remember to source ~/.bashrc or re-login to refresh environment variables."
 
