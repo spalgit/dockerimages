@@ -1,0 +1,103 @@
+
+# Boltz 
+# =====
+#
+# Executes ProLIF to compute interaction fingerprints (IFPs), saves the results,
+# calculates the masked Tanimoto similarity against a reference IFP,
+# and determines the total number of interactions.
+
+name: Boltz2 
+
+
+nodes:
+- name: smiles
+  type: ReinventEntry
+- name: embed
+  type: Smiles2Molecules
+- name: tosmiles
+  type: ToSmiles
+- name: boltz2 
+  type: Boltz2 
+- name: rnv
+  type: ReinventExit
+- name: void
+  type: Void
+- name: isocopy
+  type: Copy
+- name: bestisomerfilter
+  type: BestIsomerFilter
+- name: saveligs
+  type: SaveSingleLibrary
+
+channels:
+- sending:
+    smiles: out
+  receiving:
+    embed: inp
+- sending:
+    embed: out
+  receiving:
+    tosmiles: inp
+- sending:
+    tosmiles: out
+  receiving:
+    boltz2: inp
+- sending:
+    boltz2: out
+  receiving:
+    isocopy: inp
+- sending:
+    isocopy: out
+  receiving:
+    rnv: inp
+- sending:
+    isocopy: out
+  receiving:
+    bestisomerfilter: inp
+- sending:
+    bestisomerfilter: out
+  receiving:
+    saveligs: inp
+- sending:
+    smiles: out_metadata
+  receiving:
+    void: inp
+
+
+parameters:
+
+# MANDATORY: SDF file input
+- name: inp 
+  map:
+  - smiles: data
+
+- name: out
+  map:
+  - rnv: data
+
+
+# OPTIONAL: Where to save output poses (if save_poses is True)
+- name: save_location
+  value: saved_ligands_BOLTZ.sdf
+  map:
+  - saveligs: file
+
+
+# OPTIONAL: Whether to save output poses
+- name: save_poses
+  map:
+  - saveligs: active
+
+# MANDATORY: SDF file output
+- name: receptor_seq 
+  value: "ELKFTTALGRLQHRVRETRLLRESGGEDLATMLQGTVGDLEATQALVLKRIQIWKRQQQLAGNGTPFEESLAGLQERCESLVEIYSQLQQEIGAASGELEPKTRASLISRLDEVLRTLVTSSFLVEKQPPQVLKTQTKFQAGVRFLLGLQFLGTSAKPPMVRADMVTEKQARELSLAESTGEIMNNTVPLENSIPSNCCSALFKNLLLKTEEKCAVLFSTSFTLGPNKLLIQLQALSLPLVVIVHGNQDNNAKATILWDNAFSEMDRVPFVVAERVPWEKMCETLNLKFMAEVGTSRGLLPEHFLFLAQKIFNDNSLSVEAFQHRCVSWSQFNKEILLGRGFTFWQWFDGVLDLTKRCLRSYWSDRLIIGFISKQYVTSLLLNEPDGTFLLRFSDSEIGGITIAHVIRSPQIENIQPFSAKDLSIRSLGDRIRDLAQLKNLYPKKPKDEAF" 
+  map:
+  - boltz2: inp_seq 
+
+
+# MANDATORY: SDF file output
+- name: msa 
+  value: "/home/spal/boltz/examples/msa/seq1.a3m"
+  map:
+  - boltz2: inp_msa
+
