@@ -1,0 +1,67 @@
+# Global configuration for maize
+
+# Temporary files are stored in scatch
+scratch = "/tmp"
+packages = [
+    "maize.steps.mai",
+    "maize.graphs.mai"
+]
+
+# Default SLURM options (not needed in the tutorial)
+#[batch]
+#system = "slurm"
+#queue = "default"
+#walltime = "12:00:00"
+#max_jobs = 12
+
+# Environment variables (not needed in the tutorial)
+#[environment]
+#SCHROD_LICENSE_FILE = ""
+#OE_LICENSE = ""
+
+# Step-specific settings
+[gypsum]  # needed for tutorial
+commands.gypsum = "/home/spal/gypsum_dl/run_gypsum_dl.py"
+
+[autodockgpu]  # needed for tutorial
+commands.autodock_gpu = "/home/spal/AutoDock-GPU/bin/autodock_gpu_128wi"
+
+[reinvent]
+scripts.reinvent.interpreter = "/home/spal/miniconda3/envs/reinvent/bin/python"
+scripts.reinvent.location = "/home/spal/miniconda3/envs/reinvent/bin/reinvent"
+
+[aevplig]
+scripts.aevplig.interpreter = "/home/spal/miniconda3/envs/aev-plig/bin/python"
+scripts.aevplig.location = "/home/spal/AEV-PLIG/process_and_predict.py"
+commands.aevplig="/home/spal/AEV-PLIG/process_and_predict.py"
+
+[qptunapredict]
+#commands.qptuna-predict="/home/spal/miniconda3/envs/qsartuna/bin/qsartuna-predict"
+scripts.qptuna-predict.interpreter= "/home/spal/miniconda3/envs/qsartuna/bin/python"
+scripts.qptuna-predict.location= "/home/spal/miniconda3/envs/qsartuna/bin/qsartuna-predict"
+
+[qptunahyper]
+#commands.qptuna-optimize="/home/spal/miniconda3/envs/qsartuna/bin/qsartuna-optimize"
+scripts.qptuna-optimize.interpreter= "/home/spal/miniconda3/envs/qsartuna/bin/python"
+scripts.qptuna-optimize.location= "/home/spal/miniconda3/envs/qsartuna/bin/qsartuna-optimize"
+
+[qptunatrain]
+#commands.qptuna-build="/home/spal/miniconda3/envs/qsartuna/bin/qsartuna-build"
+scripts.qptuna-build.interpreter= "/home/spal/miniconda3/envs/qsartuna/bin/python"
+scripts.qptuna-build.location= "/home/spal/miniconda3/envs/qsartuna/bin/qsartuna-build"
+
+
+
+[boltz2]  # REQUIRED for your workflow's "name: boltz" node
+scripts.boltz.interpreter = "/home/spal/miniconda3/envs/boltz2/bin/python"
+scripts.boltz.location    = "/home/spal/miniconda3/envs/boltz2/bin/boltz"
+commands.boltz = "/home/spal/miniconda3/envs/boltz2/bin/boltz"
+
+
+# other examples: fill in as needed but not needed in the tutorial
+
+[preparegrid]
+commands.prepare_receptor = "prepare_receptor"
+commands.autogrid = "autogrid4"
+scripts.write_gpf.interpreter = "python"
+scripts.write_gpf.location = "prepare_gpf.py"
