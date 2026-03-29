@@ -1,0 +1,79 @@
+{
+  "task": "optimization",
+  "data": {
+    "input_column": "SMILES",
+    "response_column": "KSOL",
+    "training_dataset_file": "Openadment_expansion_all_training_main.csv"
+  },
+  "descriptors": [
+    {
+      "name": "SmilesAndSideInfoFromFile",
+      "parameters": {
+        "file": "Openadment_expansion_all_training_side_info.csv",
+        "input_column": "SMILES",
+        "y_aux_column": "ylabels"
+      }
+    }
+  ],
+  "settings": {
+    "mode": "regression",
+    "n_splits": 5,
+    "n_replicates": 5,
+    "direction": "maximize",
+    "n_startup_trials": 1,
+    "n_trials": 100,
+    "n_jobs": 8
+  },
+  "algorithms": [
+    {
+      "name": "ChemPropRegressor",
+      "parameters": {
+        "aggregation_norm": {
+          "low": 100,
+          "high": 100
+        },
+        "batch_size": [64],
+        "ensemble_size": 1,
+        "epochs": 10,
+        "depth": {
+          "low": 2,
+          "high": 6
+        },
+        "ffn_hidden_dim": {
+          "low": 300,
+          "high": 2400
+        },
+        "ffn_num_layers": {
+          "low": 1,
+          "high": 4
+        },
+        "final_lr_ratio": {
+          "low": 1e-2,
+          "high": 1e-2
+        },
+        "message_hidden_dim": {
+          "low": 300,
+          "high": 2400
+        },
+        "init_lr_ratio": {
+          "low": 1e-2,
+          "high": 1e-2
+        },
+        "max_lr": {
+          "low": 1e-2,
+          "high": 1e-2
+        },
+        "warmup_epochs_ratio": {
+          "low": 0.1,
+          "high": 0.1
+        },
+        "activation": ["RELU"],
+        "aggregation": ["norm"],
+        "loss_function": ["mve"],
+        "undirected": [true],
+        "message_bias": [true],
+        "batch_norm": [true,false],
+        "molecule_featurizers": ["morgan_binary", "morgan_count"]
+      }
+    }
+  
