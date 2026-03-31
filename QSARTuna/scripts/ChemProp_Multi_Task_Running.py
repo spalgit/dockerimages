@@ -38,6 +38,13 @@ from optunaz.descriptors import SmilesAndSideInfoFromFile
 from optunaz.utils.preprocessing.splitter import Stratified
 from optunaz.utils.preprocessing.deduplicator import KeepMedian
 from sklearn.metrics import (r2_score, mean_squared_error, mean_absolute_error)
+from optunaz.utils.preprocessing.transform import (
+    LogBase,
+    LogNegative,
+    ModelDataTransform
+)
+
+
 
 # Setup directories and logging
 dirname = "ChemProp_Plots"
@@ -62,6 +69,11 @@ config = OptimizationConfig(
     data=Dataset(
         input_column="SMILES",
         response_column="KSOL",
+        split_strategy=Stratified(fraction=0.4),
+        log_transform=True, # Set to True to perform
+        log_transform_base=LogBase.LOG10, # Log10 base will be used
+        log_transform_negative=LogNegative.TRUE,
+        log_transform_unit_conversion=6,
         training_dataset_file="~/dockerimages/QSARTuna/processed_Openadmet_train_main.csv",
         test_dataset_file="~/dockerimages/QSARTuna/processed_Openadmet_test.csv"
     ),
