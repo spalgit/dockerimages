@@ -154,52 +154,50 @@ print("🔮 Making test predictions...")
 with open(f"{dirname}/best.pkl", "rb") as f:
     model = dill.load(f)
 
-df_test = pd.read_csv(config.data.test_dataset_file)
-expected = df_test[config.data.response_column].values
-smiles_col = df_test[config.data.input_column]
 
-# ✅ FIXED: Use predictor for ChemProp models
-predicted = model.predictor.predict(df_test)  # Returns DataFrame with ALL tasks!
+df = pd.read_csv(config.data.test_dataset_file)  # Load test data.
 
-# Primary task (KSOL) for metrics
-predicted_ksol = predicted[config.data.response_column].values  # Extract primary task
+expected = df[config.data.response_column]
+predicted = model.predict_from_smiles(df[config.data.input_column])
 
-# Calculate metrics
-r2 = r2_score(expected, predicted_ksol)
-rmse = np.sqrt(mean_squared_error(expected, predicted_ksol))
-mae = mean_absolute_error(expected, predicted_ksol)
+from sklearn.metrics import (r2_score, mean_squared_error, mean_absolute_error)
+import numpy as np
 
-print(f"Test Set Metrics:")
-print(f"R²: {r2:.3f}")
-print(f"RMSE: {rmse:.3f}")
-print(f"MAE: {mae:.3f}")
-print(f"All prediction columns: {list(predicted.columns)}")
+# R2
+r2 = r2_score(y_true=expected, y_pred=predicted)
 
-# Save all predictions
-output_df = df_test.copy()
-output_df = pd.concat([output_df, predicted], axis=1)
-output_df.to_csv(f"{dirname}/test_all_predictions.csv", index=False)
+# RMSE. sklearn 0.24 added squared=False to get RMSE, here we use np.sqrt().
+rmse = np.sqrt(mean_squared_error(y_true=expected, y_pred=predicted))
 
-# Plot
-plt.figure(figsize=(8, 6))
-plt.scatter(expected, predicted_ksol, alpha=0.6)
-lims = [min(expected.min(), predicted_ksol.min()), max(expected.max(), predicted_ksol.max())]
-plt.plot(lims, lims, color="black", linestyle="--", linewidth=1)
-plt.xlabel(f"Expected {config.data.response_column}")
-plt.ylabel(f"Predicted {config.data.response_column}")
-plt.title("Test Set Predictions")
+# MAE
+mae = mean_absolute_error(y_true=expected, y_pred=predicted)
 
-textstr = f"$R^2$ = {r2:.3f}\nRMSE = {rmse:.3f}\nMAE = {mae:.3f}"
-plt.text(0.02, 0.98, textstr, transform=plt.gca().transAxes, fontsize=12,
-         verticalalignment="top", bbox=dict(boxstyle="round", facecolor="white", alpha=0.8))
-plt.tight_layout()
+
+plt.figure()
+plt.scatter(expected, predicted)
+
+# Get the current axes (this is what you should call .plot on)
+ax = plt.gca()
+
+# Diagonal line
+lims = [expected.min(), expected.max()]
+ax.plot(lims, lims, color="black", linestyle="--", linewidth=1)
+
+ax.set_xlabel(f"Expected {config.data.response_column}")
+ax.set_ylabel(f"Predicted {config.data.response_column}")
+
+# Add R², MSE, MAE in upper left
+textstr = f"$R^2$ = {r2:.3f}\nMSE = {rmse:.3f}\nMAE = {mae:.3f}"
+ax.text(
+    0.02, 0.98, textstr,
+    transform=ax.transAxes,
+    fontsize=10,
+    verticalalignment="top",
+    bbox=dict(boxstyle="round", facecolor="white", alpha=0.8)
+)
+
 plt.savefig(f"{dirname}/Test_set_Regression_corr.png", dpi=300, bbox_inches="tight")
 plt.close()
 
-print("✅ Complete! Check ChemProp_Plots/ for:")
-print("   - optimization_progress.png")
-print("   - CV_optimization_progress.png")
-print("   - Test_set_Regression_corr.png")
-print("   - best.pkl (trained model)")
-print("   - best_Model_config.json")
-print("   - test_all_predictions.csv (ALL tasks!)")
+
+build_merged(buildconfig, f"{dirname}/merged.pkl")
