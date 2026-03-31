@@ -3,26 +3,30 @@
   "data": {
     "input_column": "SMILES",
     "response_column": "KSOL",
-    "training_dataset_file": "Openadment_expansion_all_training_main.csv"
+    "training_dataset_file": "~/dockerimages/QSARTuna/Openadment_expansion_all_training_main.csv"
   },
   "descriptors": [
     {
       "name": "SmilesAndSideInfoFromFile",
       "parameters": {
-        "file": "Openadment_expansion_all_training_side_info.csv",
+        "file": "~/dockerimages/QSARTuna/Openadment_expansion_all_training_side_info.csv",
         "input_column": "SMILES",
-        "y_aux_column": "ylabels"
+        "y_aux_column": "ylabels" ,
+        "y_aux_weight_pc": {
+                "low": 0,
+                "high": 100,
+                "q": 10}
       }
     }
   ],
   "settings": {
     "mode": "regression",
-    "n_splits": 5,
-    "n_replicates": 5,
+    "n_splits":2,
+    "n_replicates": 2,
     "direction": "maximize",
     "n_startup_trials": 1,
-    "n_trials": 100,
-    "n_jobs": 8
+    "n_trials": 15,
+    "n_jobs": 4
   },
   "algorithms": [
     {
@@ -74,6 +78,7 @@
         "message_bias": [true],
         "batch_norm": [true,false],
         "molecule_featurizers": ["morgan_binary", "morgan_count"]
-      }
+              }
     }
-  
+  ]
+}
