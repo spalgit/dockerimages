@@ -63,7 +63,7 @@ from optunaz.config.optconfig import (
 from optunaz.datareader import Dataset
 from optunaz.descriptors import ECFP, MACCS_keys, ECFP_counts, PathFP
 
-dirname = "PRF_Regression_Plots_5"
+dirname = "PRF_Regression_Plots"
 if not os.path.exists(dirname):
     os.mkdir(dirname)
     print(f"Directory '{dirname}' created.")
@@ -93,19 +93,19 @@ config = OptimizationConfig(
                 "low": 2,
                 "high": 30
                 },
-            n_estimators={"low": 10, "high": 150},
+            n_estimators={"low": 10, "high": 250},
             min_py_sum_leaf={"low": 1, "high": 10},
-            max_features=["auto", "sqrt", "log2"]
+            max_features=["auto"]
             )
     ],
     settings=OptimizationConfig.Settings(
         mode=ModelMode.REGRESSION,
-        n_splits=5,
+        n_splits=3,
         n_trials=100,  # Total number of trials. Make sure to change to 100 or so for a production run
-        n_startup_trials=50,  # Number of startup ("random") trials.
+        n_startup_trials=20,  # Number of startup ("random") trials.
         random_seed=42, # Seed for reproducability
         n_replicates=5,
-        n_jobs=2,
+        n_jobs=4,
         direction=OptimizationDirection.MAXIMIZATION,
     ),
 )
@@ -179,47 +179,71 @@ with open(f"{dirname}/best.pkl", "rb") as f:
 
 df = pd.read_csv(config.data.test_dataset_file)  # Load test data.
 
-expected = df[config.data.response_column]
+expected_raw = df[config.data.response_column]
+#expected = config.data.get_sets()[1]
 predicted = model.predict_from_smiles(df[config.data.input_column])
 
-from sklearn.metrics import (r2_score, mean_squared_error, mean_absolute_error)
-import numpy as np
+def ptr_transform(y_raw, threshold=5.0, std=0.6):
+    """
+    Transform raw pEC50 values to PTR representation (0-1 scale)
+    Matches QSARtuna's probabilistic threshold representation
+    """
+    z = (threshold - y_raw) / std  # Standardize distance from threshold
+    ptr = 1.0 / (1.0 + np.exp(z))  # Logistic/sigmoid transformation
+    return np.clip(ptr, 0.0, 1.0)
 
-# R2
-r2 = r2_score(y_true=expected, y_pred=predicted)
+expected_ptr = ptr_transform(expected_raw,
+                           threshold=config.data.probabilistic_threshold_representation_threshold,
+                           std=config.data.probabilistic_threshold_representation_std)
 
-# RMSE. sklearn 0.24 added squared=False to get RMSE, here we use np.sqrt().
-rmse = np.sqrt(mean_squared_error(y_true=expected, y_pred=predicted))
+# Calculate metrics on PTR scale (appropriate for classification/probability)
+from sklearn.metrics import (r2_score, mean_squared_error, mean_absolute_error, roc_auc_score)
 
-# MAE
-mae = mean_absolute_error(y_true=expected, y_pred=predicted)
+r2_ptr = r2_score(expected_ptr, predicted)
+rmse_ptr = np.sqrt(mean_squared_error(expected_ptr, predicted))
+mae_ptr = mean_absolute_error(expected_ptr, predicted)
 
+# Also calculate classification metrics if you want binary performance
+binary_expected = (expected_raw >= 5.0).astype(int)
+auc = roc_auc_score(binary_expected, predicted)
 
-plt.figure()
-plt.scatter(expected, predicted)
+print(f"PTR Scale Metrics:")
+print(f"R² (PTR): {r2_ptr:.3f}")
+print(f"RMSE (PTR): {rmse_ptr:.3f}")
+print(f"MAE (PTR): {mae_ptr:.3f}")
+print(f"ROC-AUC (binary): {auc:.3f}")
 
-# Get the current axes (this is what you should call .plot on)
-ax = plt.gca()
+# Plot PTR expected vs predicted (following notebook style)
+plt.figure(figsize=(8, 6))
+ax = plt.scatter(expected_ptr, predicted, alpha=0.6, s=20)
+lims = [0, 1]  # Both axes are 0-1 scale
+plt.plot(lims, lims, color="black", linestyle="--", linewidth=2, label="Perfect prediction")
+plt.xlabel(f"Expected {config.data.response_column} (PTR)")
+plt.ylabel(f"Predicted {config.data.response_column} (PTR)")
+plt.xlim(lims)
+plt.ylim(lims)
+plt.grid(True, alpha=0.3)
 
-# Diagonal line
-lims = [expected.min(), expected.max()]
-ax.plot(lims, lims, color="black", linestyle="--", linewidth=1)
+# Add metrics text
+textstr = f"$R^2$ = {r2_ptr:.3f}\nRMSE = {rmse_ptr:.3f}\nMAE = {mae_ptr:.3f}\nAUC = {auc:.3f}"
+plt.text(0.02, 0.98, textstr, transform=ax.transAxes, fontsize=11,
+         verticalalignment="top", bbox=dict(boxstyle="round", facecolor="white", alpha=0.8))
 
-ax.set_xlabel(f"Expected {config.data.response_column}")
-ax.set_ylabel(f"Predicted {config.data.response_column}")
-
-# Add R², MSE, MAE in upper left
-textstr = f"$R^2$ = {r2:.3f}\nMSE = {rmse:.3f}\nMAE = {mae:.3f}"
-ax.text(
-    0.02, 0.98, textstr,
-    transform=ax.transAxes,
-    fontsize=10,
-    verticalalignment="top",
-    bbox=dict(boxstyle="round", facecolor="white", alpha=0.8)
-)
-
-plt.savefig(f"{dirname}/Test_set_Regression_corr.png", dpi=300, bbox_inches="tight")
+plt.legend()
+plt.tight_layout()
+plt.savefig(f"{dirname}/Test_set_PTR_scatter.png", dpi=300, bbox_inches="tight")
 plt.close()
 
-
-build_merged(buildconfig, f"{dirname}/merged.pkl")
+# Optional: Raw pEC50 vs Predicted probability plot (for interpretation)
+plt.figure(figsize=(8, 6))
+plt.scatter(expected_raw, predicted, alpha=0.6, s=20, c=binary_expected, cmap='RdYlBu_r')
+plt.axhline(y=0.5, color='gray', linestyle='--', alpha=0.7, label='Decision threshold')
+plt.axvline(x=5.0, color='gray', linestyle='--', alpha=0.7, label='Activity threshold')
+plt.xlabel(f"True pEC50")
+plt.ylabel(f"Predicted Probability (PTR)")
+plt.colorbar(label="Active (1) / Inactive (0)")
+plt.legend()
+plt.grid(True, alpha=0.3)
+plt.tight_layout()
+plt.savefig(f"{dirname}/Test_set_raw_vs_predicted.png", dpi=300, bbox_inches="tight")
+plt.close()
