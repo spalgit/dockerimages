@@ -1,0 +1,24 @@
+name: openadmet-models
+channels:
+  - conda-forge
+dependencies:
+  - python >= 3.12
+  - pip
+  - chemprop >= 2.1.1
+  - rdkit
+  - numpy
+  - pandas
+  - scikit-learn
+  - matplotlib
+  - seaborn
+  - jupyterlab
+  - rich
+  - tabulate
+  - pytorch-gpu
+  - pytorch-lightning
+  - pytorch_cluster
+  - pytorch_geometric
+  - pytorch_scatter
+  - pytorch_sparse
+  - pip:
+      - descriptastorus
