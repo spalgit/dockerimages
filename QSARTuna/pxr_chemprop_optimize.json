@@ -1,0 +1,78 @@
+{
+  "task": "optimization",
+  "data": {
+    "input_column": "SMILES",
+    "response_column": "pEC50_PXC50",
+    "training_dataset_file": "/home/spal/dockerimages/QSARTuna/PXR/training_data_from_similarity_analysis_restriction_on_lower_limit_error_WITH_Chembl.csv"
+  },
+  "descriptors": [
+    {
+      "name": "SmilesFromFile",
+      "parameters": {}
+    }
+  ],
+  "settings": {
+    "mode": "regression",
+    "n_splits": 3,
+    "n_replicates": 3,
+    "direction": "maximize",
+    "n_trials": 30,
+    "scoring": "r2"
+  },
+  "algorithms": [
+    {
+      "name": "ChemPropRegressor",
+      "parameters": {
+        "aggregation_norm": {
+          "low": 50,
+          "high": 200
+        },
+        "batch_size": [64],
+        "ensemble_size": 3,
+        "epochs": 150,
+        "patience": 15,
+        "depth": {
+          "low": 2,
+          "high": 5
+        },
+        "trial_dropout": 1,
+        "ffn_hidden_dim": {
+          "low": 300,
+          "high": 600
+        },
+        "ffn_num_layers": {
+          "low": 1,
+          "high": 3
+        },
+        "final_lr_ratio": {
+          "low": 0.0001,
+          "high": 0.01
+        },
+        "message_hidden_dim": {
+          "low": 300,
+          "high": 600
+        },
+        "init_lr_ratio": {
+          "low": 0.01,
+          "high": 0.1
+        },
+        "max_lr": {
+          "low": 0.0001,
+          "high": 0.001
+        },
+        "warmup_epochs_ratio": {
+          "low": 0.02,
+          "high": 0.1,
+          "step": 0.02
+        },
+        "activation": ["RELU", "LEAKYRELU"],
+        "aggregation": ["norm", "mean"],
+        "loss_function": ["mse"],
+        "undirected": [false],
+        "message_bias": [false],
+        "batch_norm": [true, false],
+        "molecule_featurizers": ["rdkit_2d"]
+      }
+    }
+  ]
+}
