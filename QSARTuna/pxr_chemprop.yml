@@ -1,0 +1,107 @@
+# This spection specifies the input data
+data:
+  # Specify the dataset file
+  resource: /home/spal/dockerimages/QSARTuna/PXR_For_QSARTuna_Modelling/processed_Openadmet_REAL_PXR_train_AND_test_main_with_side_info_AND_counter_screen.csv 
+  type: intake
+  input_col: SMILES
+  # Specify each (1+) of the target columns, or the column that you're trying to predict
+  target_cols:
+  - pEC50 
+
+
+# Additional metadata
+metadata:
+  authors: Your Name
+  email: youremail@mail.com
+  biotargets:
+  - PXR 
+  build_number: 0
+  description: basic regression using a ChemProp multitask task model
+  driver: pytorch
+  name: chemprop 
+  tag: chemprop
+  tags:
+  - openadmet
+  - test
+  version: v1
+
+# Section specifying training procedure
+procedure:
+  # Featurization specification
+  feat:
+    # Using the ChemPropFeaturizer (for ChemProp model)
+    # See openadmet.models.features
+    type: ChemPropFeaturizer
+    # No parameters passed
+    params: {}
+
+  # Model specification
+  model:
+    # Indicate model type
+    # See openadmet.models.architecture
+    type: ChemPropModel
+    # Specify model parameters
+    params:
+      depth: 3 
+      ffn_hidden_dim: 300
+      ffn_hidden_num_layers: 2 
+      message_hidden_dim: 300
+      dropout: 0.2
+      batch_norm: True
+      messages: bond
+      n_tasks: 1 # Number of tasks should match the number of target columns
+      from_chemeleon: False
+
+  # Specify data splits
+  split:
+    # Specify how data will be split
+    # See openadmet.models.split
+    # ScaffoldSplitter groups molecules by Murcko scaffold so the test set
+    # contains structurally novel scaffolds — the chemically meaningful
+    # equivalent of stratified splitting for regression QSAR tasks.
+    # Note: ScaffoldSplitter logs a warning that it is not available for
+    # cross-validation (the CV in the report section uses its own K-fold
+    # logic and is unaffected).
+    type: ScaffoldSplitter
+    # Specify split parameters
+    params:
+      random_state: 42
+      train_size: 0.9
+      val_size: 0.0
+      test_size: 0.1
+
+  # Specify training configuration
+  train:
+    # Specify the trainer, here LightningTrainer as ChemProp is a PyTorch Lightning model
+    # See openadmet.models.trainer
+    type: LightningTrainer
+    # Specify model parameters
+    params:
+      accelerator: gpu
+      early_stopping: true
+      early_stopping_patience: 10
+      early_stopping_mode: min
+      early_stopping_min_delta: 0.001
+      max_epochs: 100
+      monitor_metric: val_loss
+      use_wandb: false
+      wandb_project: demos # Specify wandb project name according to guidelines
+
+# Section specifying report generation
+report:
+  # Configure evaluation
+  eval:
+  # Generate regression metrics
+  - type: RegressionMetrics
+    params: {}
+  # Generate regression plots & do cross validation
+  - type: PytorchLightningRepeatedKFoldCrossValidation
+    params:
+      axes_labels:
+      - True pEC50 
+      - Predicted pEC50 
+      n_repeats: 3
+      n_splits: 3
+      random_state: 42
+      pXC50: true
+      title: True vs Predicted LogAC50 on test set
