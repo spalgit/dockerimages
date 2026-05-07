@@ -39,6 +39,8 @@ from sklearn.metrics import mean_absolute_error
 from sklearn.model_selection import train_test_split
 
 # Registers all OpenAdmet classes into their registries.
+from chemprop import nn as cp_nn  # for MAE criterion patch
+
 from openadmet.models.registries import *  # noqa: F401 F403
 from openadmet.models.architecture.chemprop import ChemPropModel
 from openadmet.models.features.chemprop import ChemPropFeaturizer
@@ -57,18 +59,19 @@ SMILES_COL = "SMILES"
 TARGET_COL = "pEC50"
 
 # ── HPO search space bounds ───────────────────────────────────────────────────
-DEPTH_RANGE          = (2, 5)
-FFN_HIDDEN_DIM_OPTS  = [128, 256, 300, 512]
+DEPTH_RANGE          = (2, 6)
+FFN_HIDDEN_DIM_OPTS  = [256, 300, 512, 1024]
 FFN_NUM_LAYERS_RANGE = (1, 4)
-MSG_HIDDEN_DIM_OPTS  = [128, 256, 300, 512]
+MSG_HIDDEN_DIM_OPTS  = [256, 300, 512, 1024]
 MAX_LR_RANGE         = (1e-4, 5e-3)   # sampled on log scale
 DROPOUT_RANGE        = (0.0, 0.4)
+WEIGHT_DECAY_RANGE   = (1e-6, 1e-2)   # sampled on log scale
 
 # ── Training budget ───────────────────────────────────────────────────────────
-TRIAL_MAX_EPOCHS  = 60
-TRIAL_ES_PATIENCE = 10
-FINAL_MAX_EPOCHS  = 100
-FINAL_ES_PATIENCE = 15
+TRIAL_MAX_EPOCHS  = 100
+TRIAL_ES_PATIENCE = 20
+FINAL_MAX_EPOCHS  = 150
+FINAL_ES_PATIENCE = 25
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -116,6 +119,7 @@ def train_and_eval(
     max_lr: float,
     dropout: float,
     batch_norm: bool,
+    weight_decay: float,
     max_epochs: int,
     es_patience: int,
     output_dir: Path,
@@ -143,12 +147,16 @@ def train_and_eval(
         max_lr=max_lr,
         dropout=dropout,
         batch_norm=batch_norm,
-        metric_list=["mse", "mae", "rmse"],
+        weight_decay=weight_decay,
+        metric_list=["mae", "mse", "rmse"],
         monitor_metric="val_loss",
         scheduler="noam",
         warmup_epochs=2,
     )
     model.build(scaler=train_scaler)
+    # Train directly on MAE instead of MSE — aligns training loss with the
+    # evaluation metric we care about and typically reduces val/MAE further.
+    model.estimator.predictor.criterion = cp_nn.metrics.MAE()
 
     trainer = LightningTrainer(
         max_epochs=max_epochs,
@@ -186,6 +194,7 @@ def make_objective(X_train: pd.Series, y_train: pd.DataFrame, out_base: Path):
         max_lr             = trial.suggest_float("max_lr",         *MAX_LR_RANGE, log=True)
         dropout            = trial.suggest_float("dropout",        *DROPOUT_RANGE)
         batch_norm         = trial.suggest_categorical("batch_norm", [True, False])
+        weight_decay       = trial.suggest_float("weight_decay",   *WEIGHT_DECAY_RANGE, log=True)
 
         # ── Inner HPO train / val split (random 80/20) ──────────────────────
         X_tr, X_val, y_tr, y_val = train_test_split(
@@ -207,6 +216,7 @@ def make_objective(X_train: pd.Series, y_train: pd.DataFrame, out_base: Path):
                 max_lr=max_lr,
                 dropout=dropout,
                 batch_norm=batch_norm,
+                weight_decay=weight_decay,
                 max_epochs=TRIAL_MAX_EPOCHS,
                 es_patience=TRIAL_ES_PATIENCE,
                 output_dir=trial_dir,
@@ -274,6 +284,7 @@ def write_best_yaml(best_params: dict, out_dir: Path, data_csv: str) -> Path:
                     "n_tasks":           1,
                     "scheduler":         "noam",
                     "warmup_epochs":     2,
+                    "weight_decay":      round(float(best_params["weight_decay"]), 8),
                 },
                 "serial_path": None,
                 "type": "ChemPropModel",
@@ -397,6 +408,7 @@ def main():
         max_lr=best.params["max_lr"],
         dropout=best.params["dropout"],
         batch_norm=best.params["batch_norm"],
+        weight_decay=best.params["weight_decay"],
         max_epochs=FINAL_MAX_EPOCHS,
         es_patience=FINAL_ES_PATIENCE,
         output_dir=out_base / "best_model",
