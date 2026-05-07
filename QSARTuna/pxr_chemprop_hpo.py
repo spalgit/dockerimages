@@ -60,9 +60,9 @@ TARGET_COL = "pEC50"
 
 # ── HPO search space bounds ───────────────────────────────────────────────────
 DEPTH_RANGE          = (2, 6)
-FFN_HIDDEN_DIM_OPTS  = [256, 300, 512, 1024]
+FFN_HIDDEN_DIM_OPTS  = [128, 256, 300, 512, 1024]
 FFN_NUM_LAYERS_RANGE = (1, 4)
-MSG_HIDDEN_DIM_OPTS  = [256, 300, 512, 1024]
+MSG_HIDDEN_DIM_OPTS  = [128, 256, 300, 512, 1024]
 MAX_LR_RANGE         = (1e-4, 5e-3)   # sampled on log scale
 DROPOUT_RANGE        = (0.0, 0.4)
 WEIGHT_DECAY_RANGE   = (1e-6, 1e-2)   # sampled on log scale
