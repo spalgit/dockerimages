@@ -395,6 +395,15 @@ def main():
             "0 disables weighting (all weights=1). Default: 1.0."
         ),
     )
+    parser.add_argument(
+        "--external_test_csv",
+        default="/home/spal/dockerimages/QSARTuna/PXR/test.csv",
+        help="External test set CSV (SMILES only, no target). Predictions saved to out_dir.",
+    )
+    parser.add_argument(
+        "--external_smiles_col",  default="SMILES",          help="SMILES column name in external test CSV")
+    parser.add_argument(
+        "--external_name_col",    default="Molecule Name",   help="Compound name column in external test CSV")
     args = parser.parse_args()
 
     out_base = Path(args.out_dir)
@@ -491,10 +500,36 @@ def main():
 
     yaml_path = write_best_yaml(best.params, out_base, args.data_csv)
 
+    # ── External test set predictions ─────────────────────────────────────────
+    if args.external_test_csv:
+        ext_path = Path(args.external_test_csv)
+        if ext_path.exists():
+            print(f"\nPredicting on external test set: {ext_path}")
+            ext_df = pd.read_csv(ext_path)
+            ext_smiles = ext_df[args.external_smiles_col].reset_index(drop=True)
+
+            feat_ext = ChemPropFeaturizer()
+            ext_dl, _, _, _ = feat_ext.featurize(ext_smiles)
+            ext_preds = final_model.predict(ext_dl, accelerator="gpu").flatten()
+
+            out_cols = {}
+            if args.external_name_col in ext_df.columns:
+                out_cols[args.external_name_col] = ext_df[args.external_name_col].to_numpy()
+            out_cols[args.external_smiles_col] = ext_smiles.to_numpy()
+            out_cols["predicted_pEC50"] = ext_preds
+
+            pred_df = pd.DataFrame(out_cols)
+            pred_path = out_base / "external_test_predictions.csv"
+            pred_df.to_csv(pred_path, index=False)
+            print(f"  {len(pred_df)} predictions saved to {pred_path}")
+        else:
+            print(f"\nWarning: external test CSV not found: {ext_path}")
+
     print(f"\nArtefacts saved to {out_base}/")
     print(f"  hpo_results.json                    — trial summary + test metrics")
     print(f"  optuna.db                            — full Optuna study (resumable)")
     print(f"  pxr_chemprop_chemeleon_hpo_best.yaml — ready-to-run OpenAdmet YAML")
+    print(f"  external_test_predictions.csv        — predicted pEC50 for external test set")
     print(f"\nTo train the final model via openadmet CLI:")
     print(f"  conda activate openadmet && cd ~/OpenAdmet")
     print(f"  openadmet train --config {yaml_path}")
