@@ -55,8 +55,9 @@ DATA_CSV = (
     "/home/spal/dockerimages/QSARTuna/PXR_For_QSARTuna_Modelling/"
     "processed_Openadmet_REAL_PXR_train_AND_test_main_with_side_info_AND_counter_screen.csv"
 )
-SMILES_COL = "SMILES"
-TARGET_COL = "pEC50"
+SMILES_COL   = "SMILES"
+TARGET_COL   = "pEC50"
+COUNTER_COL  = "pEC50_counter"
 
 # ── HPO search space ──────────────────────────────────────────────────────────
 # depth, message_hidden_dim and messages are fixed by CheMeleon weights.
@@ -79,15 +80,39 @@ STUDY_NAME = "pxr_chemprop_chemeleon_hpo"
 # Data helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
-def load_data(csv_path: str) -> tuple[pd.Series, pd.DataFrame]:
+def compute_sample_weights(df: pd.DataFrame, scale: float = 1.0) -> np.ndarray:
+    """Return per-sample weights.
+
+    Compounds where pEC50_counter > pEC50 (active in counter screen) are
+    down-weighted by exp(-scale * (pEC50_counter - pEC50)).  Compounds with
+    no counter data (NaN) or where pEC50_counter <= pEC50 receive weight 1.0.
+    """
+    delta = (df[COUNTER_COL] - df[TARGET_COL]).clip(lower=0.0).fillna(0.0)
+    return np.exp(-scale * delta.to_numpy(dtype=float))
+
+
+def load_data(
+    csv_path: str, counter_weight_scale: float = 1.0
+) -> tuple[pd.Series, pd.DataFrame, np.ndarray]:
     df = pd.read_csv(csv_path)
-    df = df[[SMILES_COL, TARGET_COL]].dropna().reset_index(drop=True)
-    return df[SMILES_COL], df[[TARGET_COL]]
+    # Keep COUNTER_COL for weight calculation; only require SMILES and TARGET to be non-null.
+    df = df[[SMILES_COL, TARGET_COL, COUNTER_COL]].dropna(
+        subset=[SMILES_COL, TARGET_COL]
+    ).reset_index(drop=True)
+    weights = compute_sample_weights(df, counter_weight_scale)
+    n_down = int((weights < 1.0).sum())
+    print(f"  Counter-screen weighting: {n_down} / {len(df)} compounds down-weighted "
+          f"(scale={counter_weight_scale})")
+    return df[SMILES_COL], df[[TARGET_COL]], weights
 
 
 def scaffold_train_test_split(
-    X: pd.Series, y: pd.DataFrame, test_size: float = 0.1, random_state: int = 42
-) -> tuple[pd.Series, pd.Series, pd.DataFrame, pd.DataFrame]:
+    X: pd.Series,
+    y: pd.DataFrame,
+    weights: np.ndarray | None = None,
+    test_size: float = 0.1,
+    random_state: int = 42,
+) -> tuple[pd.Series, pd.Series, pd.DataFrame, pd.DataFrame, np.ndarray | None, np.ndarray | None]:
     splitter = ScaffoldSplitter(
         test_size=test_size,
         train_size=1.0 - test_size,
@@ -95,11 +120,21 @@ def scaffold_train_test_split(
         random_state=random_state,
     )
     X_train, _, X_test, y_train, _, y_test, _ = splitter.split(X, y)
+
+    w_train = w_test = None
+    if weights is not None:
+        train_idx = X_train.index.to_numpy()
+        test_idx  = X_test.index.to_numpy()
+        w_train = weights[train_idx]
+        w_test  = weights[test_idx]
+
     return (
         X_train.reset_index(drop=True),
         X_test.reset_index(drop=True),
         y_train.reset_index(drop=True),
         y_test.reset_index(drop=True),
+        w_train,
+        w_test,
     )
 
 
@@ -113,6 +148,7 @@ def train_and_eval(
     X_val: pd.Series,
     y_val: pd.DataFrame,
     *,
+    weights_tr: np.ndarray | None = None,
     ffn_hidden_dim: int,
     ffn_num_layers: int,
     max_lr: float,
@@ -131,7 +167,7 @@ def train_and_eval(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     feat = ChemPropFeaturizer()
-    train_dl, _, train_scaler, _ = feat.featurize(X_tr, y_tr)
+    train_dl, _, train_scaler, _ = feat.featurize(X_tr, y_tr, weights=weights_tr)
     val_dl,   _, _,            _ = feat.featurize(X_val, y_val)
 
     model = ChemPropModel(
@@ -179,7 +215,12 @@ def train_and_eval(
 # Optuna objective
 # ─────────────────────────────────────────────────────────────────────────────
 
-def make_objective(X_train: pd.Series, y_train: pd.DataFrame, out_base: Path):
+def make_objective(
+    X_train: pd.Series,
+    y_train: pd.DataFrame,
+    weights_train: np.ndarray | None,
+    out_base: Path,
+):
     def objective(trial: optuna.Trial) -> float:
         # ── Sample hyperparameters (depth/message_hidden_dim fixed by CheMeleon)
         ffn_hidden_dim  = trial.suggest_categorical("ffn_hidden_dim",  FFN_HIDDEN_DIM_OPTS)
@@ -190,9 +231,15 @@ def make_objective(X_train: pd.Series, y_train: pd.DataFrame, out_base: Path):
         weight_decay    = trial.suggest_float("weight_decay",          *WEIGHT_DECAY_RANGE, log=True)
 
         # ── Inner HPO train / val split (random 80/20) ──────────────────────
-        X_tr, X_val, y_tr, y_val = train_test_split(
-            X_train, y_train, test_size=0.2, random_state=trial.number
-        )
+        if weights_train is not None:
+            X_tr, X_val, y_tr, y_val, w_tr, _ = train_test_split(
+                X_train, y_train, weights_train, test_size=0.2, random_state=trial.number
+            )
+        else:
+            X_tr, X_val, y_tr, y_val = train_test_split(
+                X_train, y_train, test_size=0.2, random_state=trial.number
+            )
+            w_tr = None
         X_tr  = X_tr.reset_index(drop=True)
         X_val = X_val.reset_index(drop=True)
         y_tr  = y_tr.reset_index(drop=True)
@@ -202,6 +249,7 @@ def make_objective(X_train: pd.Series, y_train: pd.DataFrame, out_base: Path):
         try:
             val_mae, _ = train_and_eval(
                 X_tr, y_tr, X_val, y_val,
+                weights_tr=w_tr,
                 ffn_hidden_dim=ffn_hidden_dim,
                 ffn_num_layers=ffn_num_layers,
                 max_lr=max_lr,
@@ -335,10 +383,18 @@ def main():
     parser = argparse.ArgumentParser(
         description="Optuna HPO for ChemProp + CheMeleon PXR pEC50 — minimises MAE"
     )
-    parser.add_argument("--n_trials", type=int, default=40,               help="Number of Optuna trials")
-    parser.add_argument("--out_dir",  default="hpo_chemeleon_pxr",        help="Output directory")
-    parser.add_argument("--data_csv", default=DATA_CSV,                   help="Dataset CSV path")
-    parser.add_argument("--seed",     type=int, default=42)
+    parser.add_argument("--n_trials",             type=int,   default=40,             help="Number of Optuna trials")
+    parser.add_argument("--out_dir",                          default="hpo_chemeleon_pxr", help="Output directory")
+    parser.add_argument("--data_csv",                         default=DATA_CSV,       help="Dataset CSV path")
+    parser.add_argument("--seed",                 type=int,   default=42)
+    parser.add_argument(
+        "--counter_weight_scale", type=float, default=1.0,
+        help=(
+            "Exponential penalty scale for compounds where pEC50_counter > pEC50.  "
+            "weight = exp(-scale * max(0, pEC50_counter - pEC50)).  "
+            "0 disables weighting (all weights=1). Default: 1.0."
+        ),
+    )
     args = parser.parse_args()
 
     out_base = Path(args.out_dir)
@@ -346,12 +402,12 @@ def main():
 
     # ── Load data & scaffold split ────────────────────────────────────────────
     print("Loading data...")
-    X, y = load_data(args.data_csv)
+    X, y, weights = load_data(args.data_csv, args.counter_weight_scale)
     print(f"  {len(X)} compounds")
 
     print("Applying scaffold train/test split (90% / 10%)...")
-    X_train, X_test, y_train, y_test = scaffold_train_test_split(
-        X, y, test_size=0.1, random_state=args.seed
+    X_train, X_test, y_train, y_test, w_train, _ = scaffold_train_test_split(
+        X, y, weights, test_size=0.1, random_state=args.seed
     )
     print(f"  Train: {len(X_train)}   Test: {len(X_test)}")
 
@@ -365,7 +421,7 @@ def main():
         sampler=optuna.samplers.TPESampler(seed=args.seed),
     )
     study.optimize(
-        make_objective(X_train, y_train, out_base),
+        make_objective(X_train, y_train, w_train, out_base),
         n_trials=args.n_trials,
         gc_after_trial=True,
     )
@@ -380,8 +436,8 @@ def main():
 
     # ── Retrain on full training set with 10% val for early stopping ──────────
     print("\nRetraining best config on full training set...")
-    X_tr_final, X_val_es, y_tr_final, y_val_es = train_test_split(
-        X_train, y_train, test_size=0.1, random_state=args.seed
+    X_tr_final, X_val_es, y_tr_final, y_val_es, w_tr_final, _ = train_test_split(
+        X_train, y_train, w_train, test_size=0.1, random_state=args.seed
     )
     X_tr_final = X_tr_final.reset_index(drop=True)
     X_val_es   = X_val_es.reset_index(drop=True)
@@ -390,6 +446,7 @@ def main():
 
     _, final_model = train_and_eval(
         X_tr_final, y_tr_final, X_val_es, y_val_es,
+        weights_tr=w_tr_final,
         ffn_hidden_dim=best.params["ffn_hidden_dim"],
         ffn_num_layers=best.params["ffn_num_layers"],
         max_lr=best.params["max_lr"],
@@ -415,15 +472,18 @@ def main():
     print(f"  Test RMSE : {test_rmse:.4f}")
 
     # ── Save artefacts ────────────────────────────────────────────────────────
+    n_down = int((w_train < 1.0).sum())
     results = {
-        "model":          "ChemProp + CheMeleon",
-        "best_trial":     best.number,
-        "best_val_mae":   round(best.value,  5),
-        "test_mae":       round(test_mae,    5),
-        "test_rmse":      round(test_rmse,   5),
-        "best_params":    best.params,
-        "n_train":        int(len(X_train)),
-        "n_test":         int(len(X_test)),
+        "model":                  "ChemProp + CheMeleon",
+        "best_trial":             best.number,
+        "best_val_mae":           round(best.value,  5),
+        "test_mae":               round(test_mae,    5),
+        "test_rmse":              round(test_rmse,   5),
+        "best_params":            best.params,
+        "n_train":                int(len(X_train)),
+        "n_test":                 int(len(X_test)),
+        "counter_weight_scale":   args.counter_weight_scale,
+        "n_train_downweighted":   n_down,
     }
     results_path = out_base / "hpo_results.json"
     with open(results_path, "w") as f:
