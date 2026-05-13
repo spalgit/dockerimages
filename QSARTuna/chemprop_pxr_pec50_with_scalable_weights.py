@@ -1,25 +1,34 @@
 """
-CheMeleon-finetuned Chemprop model for PXR pEC50 regression.
+CheMeleon-finetuned Chemprop model for PXR pEC50 regression — weighted variant.
+
+Compound weights are derived from the selectivity difference between the main
+PXR assay and the counter screen (pEC50 - pEC50_counter):
+
+  • Large positive diff → compound is selective for PXR → higher training weight
+  • Negative diff      → counter screen more potent than main assay (possibly
+                          promiscuous / non-selective) → lower training weight
+  • No counter screen  → weight set to NEUTRAL_WEIGHT (1.0); no information
+                          about selectivity, so treated equally
+
+The raw differences are linearly scaled to [MIN_WEIGHT, MAX_WEIGHT] using the
+min and max of all available diff values.  Compounds without a counter screen
+(NaN diff) receive NEUTRAL_WEIGHT regardless of the scaling.
 
 Pipeline:
-  1. 5-fold STRATIFIED CV grid search to select FFN hyperparameters.
-       Stratification bins the continuous pEC50 target into quantile-based
-       groups so that every fold's validation set reflects the full activity
-       distribution — important for PXR data which spans inactive (<4) through
-       highly active (>7) compounds.
-  2. Retrain a final model on ALL training data for the average number of
-       epochs that gave the best validation loss across folds.
-  3. Save final model as a .pkl file (via torch.save).
-  4. Predict on an external test set and report performance metrics.
+  1. Compute and scale per-compound weights from pEC50_diff.
+  2. 5-fold STRATIFIED CV grid search to select FFN hyperparameters.
+  3. Retrain a final model on ALL training data using the selected params and
+     weights, for the average number of best epochs found during CV.
+  4. Save final model as a .pkl file (via torch.save).
+  5. Predict on an external test set and report performance metrics.
 
 Usage:
     conda activate chemprop
-    python ~/chemprop_pxr_pec50.py
+    python ~/chemprop_pxr_pec50_with_scalable_weights.py
 
 To load the saved model for inference in another script:
     import torch
-    from chemprop import data, featurizers
-    model = torch.load("~/pxr_chemeleon_final.pkl", weights_only=False)
+    model = torch.load("~/pxr_chemeleon_weighted_final.pkl", weights_only=False)
     model.eval()
 """
 
@@ -32,7 +41,7 @@ import pandas as pd
 import torch
 from lightning import pytorch as pl
 from lightning.pytorch.callbacks import EarlyStopping
-from sklearn.model_selection import StratifiedKFold   # replaces plain KFold
+from sklearn.model_selection import StratifiedKFold
 
 from chemprop import data, featurizers, models, nn
 
@@ -46,41 +55,45 @@ TEST_PATH = Path(
     "/home/spal/OpenAdmet/Prediction_OpenAdmet_ChemProp_Only_OpenADMET_Data.csv"
 )
 CHEMELEON_PATH  = Path.home() / "chemeleon_mp.pt"
-MODEL_PKL_PATH  = Path.home() / "pxr_chemeleon_final.pkl"
-CV_RESULTS_PATH = Path.home() / "pxr_cv_results.csv"
-OUTPUT_PREDS    = Path.home() / "pxr_external_test_predictions.csv"
+MODEL_PKL_PATH  = Path.home() / "pxr_chemeleon_weighted_final.pkl"
+CV_RESULTS_PATH = Path.home() / "pxr_weighted_cv_results.csv"
+OUTPUT_PREDS    = Path.home() / "pxr_weighted_external_test_predictions.csv"
 
 TRAIN_SMILES_COL = "SMILES"
 TRAIN_TARGET_COL = "pEC50"
+DIFF_COL         = "pEC50_diff"   # pEC50 − pEC50_counter; NaN where no counter screen
 TEST_SMILES_COL  = "SMILES"
 TEST_TARGET_COL  = "pEC50"
 TEST_NAME_COL    = "Molecule Name"
 
+# Weight scaling bounds — applied to the full observed pEC50_diff range.
+# MIN_WEIGHT is assigned to the least selective compound (most negative diff).
+# MAX_WEIGHT is assigned to the most selective compound (most positive diff).
+# Compounds without a counter screen receive NEUTRAL_WEIGHT.
+MIN_WEIGHT     = 0.5
+MAX_WEIGHT     = 2.0
+NEUTRAL_WEIGHT = 1.0   # used for the ~55 % of compounds with no counter screen
+
 N_FOLDS       = 5
-# Number of quantile bins used to stratify pEC50 for fold assignment.
-# Using N_FOLDS bins means each bin contributes one compound per fold on
-# average, giving balanced activity coverage across all splits.
-N_STRATA_BINS = N_FOLDS
-CV_MAX_EPOCHS = 30   # upper bound per fold; early stopping usually fires first
-CV_PATIENCE   = 5    # consecutive epochs without val_loss improvement before stopping
+N_STRATA_BINS = N_FOLDS   # equal-frequency pEC50 bins for stratified splitting
+CV_MAX_EPOCHS = 30
+CV_PATIENCE   = 5
 NUM_WORKERS   = 0
 
-# Hyperparameter grid — only FFN params are tuned.
-# CheMeleon's BondMessagePassing architecture is fixed by the checkpoint.
+# Hyperparameter grid — FFN only; CheMeleon MP architecture is fixed.
 PARAM_GRID = {
-    "ffn_hidden_dim": [300, 512],   # width of the hidden FFN layers
-    "ffn_n_layers":   [2, 3],       # depth of the FFN (not the message-passing depth)
-    "dropout":        [0.0, 0.2],   # dropout applied after each FFN hidden layer
+    "ffn_hidden_dim": [300, 512],
+    "ffn_n_layers":   [2, 3],
+    "dropout":        [0.0, 0.2],
 }
 
 
-# ── Custom callback — records the epoch with the lowest validation loss ────────
+# ── Custom callback — records epoch with lowest val loss ──────────────────────
 class BestEpochTracker(pl.Callback):
     """
-    Tracks which epoch produced the lowest val_loss.
-    Used after CV to set the final model's training budget:
-      final_epochs = mean(best_epochs across folds) × 1.1
-    This avoids needing a validation set when retraining on all data.
+    Tracks which training epoch produced the lowest val_loss.
+    The mean best epoch across CV folds sets the final model's training budget,
+    avoiding the need for a validation set when retraining on all data.
     """
 
     def __init__(self):
@@ -94,15 +107,53 @@ class BestEpochTracker(pl.Callback):
             self.best_epoch = trainer.current_epoch
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
-def build_datapoints(smiles_arr, targets_arr):
+# ── Weight computation ────────────────────────────────────────────────────────
+def compute_weights(diff_values: np.ndarray) -> np.ndarray:
     """
-    Convert parallel SMILES and target arrays into MoleculeDatapoint objects.
+    Scale pEC50_diff values linearly to [MIN_WEIGHT, MAX_WEIGHT].
+
+    NaN entries (no counter screen available) receive NEUTRAL_WEIGHT so that
+    they contribute equally to training — we simply have no selectivity
+    information about them, not evidence that they are unreliable.
+
+    The scaling uses the global min/max of the *available* (non-NaN) diffs so
+    that the weight range is consistent across folds and the final model.
+
+    Parameters
+    ----------
+    diff_values : array of pEC50_diff values (may contain NaN)
+
+    Returns
+    -------
+    weights : array of per-compound weights, same length as diff_values
+    """
+    weights = np.full(len(diff_values), NEUTRAL_WEIGHT, dtype=float)
+
+    has_counter = ~np.isnan(diff_values)
+    available   = diff_values[has_counter]
+
+    diff_min = available.min()
+    diff_max = available.max()
+
+    # Linear map: diff_min → MIN_WEIGHT, diff_max → MAX_WEIGHT
+    scaled = MIN_WEIGHT + (MAX_WEIGHT - MIN_WEIGHT) * (
+        (available - diff_min) / (diff_max - diff_min)
+    )
+    weights[has_counter] = scaled
+    return weights
+
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+def build_datapoints(smiles_arr, targets_arr, weights_arr):
+    """
+    Convert SMILES, targets, and per-compound weights into MoleculeDatapoints.
     Compounds whose SMILES RDKit cannot parse are silently skipped.
+    The weight is stored on the datapoint and used by Chemprop's loss function
+    to scale each compound's contribution to the gradient.
     """
     points, skipped = [], 0
-    for smi, y in zip(smiles_arr, targets_arr):
-        dp = data.MoleculeDatapoint.from_smi(smi, y)
+    for smi, y, w in zip(smiles_arr, targets_arr, weights_arr):
+        dp = data.MoleculeDatapoint.from_smi(smi, y, weight=float(w))
         if dp.mol is None:
             skipped += 1
             continue
@@ -117,21 +168,17 @@ def build_mpnn(chemeleon_hyper, chemeleon_state, ffn_hidden_dim, ffn_n_layers,
     """
     Build a fresh MPNN for each fold/run.
 
-    The CheMeleon state dict is CLONED before loading so that every call
-    starts from identical pre-trained weights, regardless of how the previous
-    fold updated them during finetuning.
+    CheMeleon weights are CLONED so every call starts from identical pre-trained
+    weights, regardless of how the previous fold updated them during finetuning.
 
-    The only hard constraint linking CheMeleon to the FFN is:
-        ffn input_dim == mp.output_dim  (both 2048 for CheMeleon)
-    All other FFN parameters (hidden_dim, n_layers, dropout) are free to tune.
+    The only hard interface constraint between CheMeleon and the FFN is:
+        ffn input_dim == mp.output_dim  (2048 for CheMeleon)
     """
     mp = nn.BondMessagePassing(**chemeleon_hyper)
     mp.load_state_dict({k: v.clone() for k, v in chemeleon_state.items()})
 
     agg = nn.MeanAggregation()
 
-    # UnscaleTransform reverses the StandardScaler applied to training targets,
-    # so model outputs are always in the original pEC50 units.
     output_transform = nn.UnscaleTransform.from_standard_scaler(scaler)
     ffn = nn.RegressionFFN(
         input_dim=mp.output_dim,   # must equal 2048 for CheMeleon
@@ -143,7 +190,7 @@ def build_mpnn(chemeleon_hyper, chemeleon_state, ffn_hidden_dim, ffn_n_layers,
 
     return models.MPNN(
         mp, agg, ffn,
-        batch_norm=False,          # not recommended with CheMeleon
+        batch_norm=False,
         metrics=[nn.metrics.RMSE(), nn.metrics.MAE()],
     )
 
@@ -153,15 +200,14 @@ def run_fold(fold_train, fold_val, chemeleon_hyper, chemeleon_state,
     """
     Train one stratified CV fold and return (best_val_rmse, best_epoch).
 
-    Target normalisation is fit on the fold's training split only and then
-    applied to the validation split — exactly as it would be in production.
-    This prevents any leakage of validation statistics into training.
+    Target normalisation is fit on the fold's training split only and applied
+    to the validation split — no leakage of validation statistics into training.
+    Per-compound weights are embedded in each MoleculeDatapoint and are
+    automatically picked up by Chemprop's weighted loss computation.
     """
-    # Fit scaler on train fold only
     train_dset = data.MoleculeDataset(fold_train, featurizer)
     scaler = train_dset.normalize_targets()
 
-    # Apply the same scaler to val (no refit)
     val_dset = data.MoleculeDataset(fold_val, featurizer)
     val_dset.normalize_targets(scaler)
 
@@ -174,7 +220,7 @@ def run_fold(fold_train, fold_val, chemeleon_hyper, chemeleon_state,
     trainer = pl.Trainer(
         logger=False,
         enable_checkpointing=False,
-        enable_progress_bar=False,   # suppressed to keep CV output readable
+        enable_progress_bar=False,
         accelerator="auto",
         devices=1,
         max_epochs=max_epochs,
@@ -202,67 +248,91 @@ else:
     print(f"CheMeleon weights found at {CHEMELEON_PATH}")
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Step 2 — Load CheMeleon checkpoint once; reuse for every fold via cloning
+# Step 2 — Load CheMeleon checkpoint once; cloned for every fold
 # ═══════════════════════════════════════════════════════════════════════════════
 print("\nLoading CheMeleon checkpoint...")
 chemeleon_ckpt  = torch.load(CHEMELEON_PATH, weights_only=True)
-chemeleon_hyper = chemeleon_ckpt["hyper_parameters"]   # BondMessagePassing kwargs
-chemeleon_state = chemeleon_ckpt["state_dict"]          # pre-trained weights tensor dict
+chemeleon_hyper = chemeleon_ckpt["hyper_parameters"]
+chemeleon_state = chemeleon_ckpt["state_dict"]
 print(f"  Hyper-parameters: {chemeleon_hyper}")
 
 featurizer = featurizers.SimpleMoleculeMolGraphFeaturizer()
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Step 3 — Load datasets
+# Step 3 — Load training data and compute per-compound weights
 # ═══════════════════════════════════════════════════════════════════════════════
 print(f"\nLoading training data:\n  {TRAIN_PATH}")
-df_train  = pd.read_csv(TRAIN_PATH)
-all_train = build_datapoints(df_train[TRAIN_SMILES_COL].values,
-                              df_train[[TRAIN_TARGET_COL]].values)
-print(f"  Usable training datapoints: {len(all_train)}")
-print(f"  pEC50 range: "
-      f"{df_train[TRAIN_TARGET_COL].min():.2f} – {df_train[TRAIN_TARGET_COL].max():.2f}")
+df_train = pd.read_csv(TRAIN_PATH)
+print(f"  {len(df_train)} rows")
+print(f"  pEC50 range : {df_train[TRAIN_TARGET_COL].min():.2f} – "
+      f"{df_train[TRAIN_TARGET_COL].max():.2f}")
 
+# ── Compute scalable weights from pEC50_diff ──────────────────────────────────
+diff_values = df_train[DIFF_COL].values   # NaN where no counter screen
+train_weights = compute_weights(diff_values)
+
+n_with_counter = (~np.isnan(diff_values)).sum()
+print(f"\n  Counter screen available : {n_with_counter} / {len(df_train)} compounds")
+print(f"  pEC50_diff range         : {np.nanmin(diff_values):.3f} – "
+      f"{np.nanmax(diff_values):.3f}  (mean {np.nanmean(diff_values):.3f})")
+print(f"  Weight range             : {train_weights.min():.3f} – "
+      f"{train_weights.max():.3f}  (neutral={NEUTRAL_WEIGHT})")
+
+all_train = build_datapoints(
+    df_train[TRAIN_SMILES_COL].values,
+    df_train[[TRAIN_TARGET_COL]].values,
+    train_weights,
+)
+print(f"  Usable datapoints: {len(all_train)}")
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Step 4 — Load external test set
+#
+# The test set has no counter screen columns, so weights are not applied there.
+# Prediction is purely based on SMILES; test pEC50 values are used only to
+# report performance after training is complete.
+# ═══════════════════════════════════════════════════════════════════════════════
 print(f"\nLoading external test set:\n  {TEST_PATH}")
 df_test  = pd.read_csv(TEST_PATH)
-all_test = build_datapoints(df_test[TEST_SMILES_COL].values,
-                             df_test[[TEST_TARGET_COL]].values)
+
+# Test compounds receive unit weight — weights only affect training loss,
+# not inference, so this is a placeholder that has no effect on predictions.
+test_weights = np.ones(len(df_test))
+all_test = build_datapoints(
+    df_test[TEST_SMILES_COL].values,
+    df_test[[TEST_TARGET_COL]].values,
+    test_weights,
+)
 print(f"  Usable test datapoints: {len(all_test)}")
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Step 4 — Build stratification labels for the training set
+# Step 5 — Build stratification labels
 #
-# StratifiedKFold requires discrete class labels, but pEC50 is continuous.
-# Solution: bin the pEC50 values into N_STRATA_BINS quantile-based groups.
-#
-# pd.qcut divides the range so each bin contains roughly the same number of
-# compounds (equal-frequency binning), rather than equal-width intervals.
-# This is preferred because PXR data tends to have many weakly active
-# compounds and fewer highly active ones — equal-width bins would leave the
-# high-activity bins sparsely populated and poorly represented in each fold.
+# StratifiedKFold needs discrete class labels; pEC50 is continuous.
+# pd.qcut creates equal-frequency bins (each bin has ~the same number of
+# compounds), which handles the skewed PXR activity distribution better than
+# equal-width bins.
 # ═══════════════════════════════════════════════════════════════════════════════
 pec50_values = np.array([d.y[0] for d in all_train])
 
 strata = pd.qcut(
     pec50_values,
     q=N_STRATA_BINS,
-    labels=False,        # return integer bin indices (0 … N_STRATA_BINS-1)
-    duplicates="drop",   # silently merge bins if boundary values are identical
+    labels=False,        # integer bin indices 0 … N_STRATA_BINS-1
+    duplicates="drop",
 ).astype(int)
 
 print(f"\nStratification bins (equal-frequency, {N_STRATA_BINS} bins):")
 for bin_id in range(strata.max() + 1):
     mask = strata == bin_id
     vals = pec50_values[mask]
+    ws   = np.array([all_train[i].weight for i in np.where(mask)[0]])
     print(f"  Bin {bin_id}: n={mask.sum():4d}  "
-          f"pEC50 {vals.min():.2f} – {vals.max():.2f}")
+          f"pEC50 {vals.min():.2f}–{vals.max():.2f}  "
+          f"mean_weight={ws.mean():.3f}")
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Step 5 — 5-fold stratified CV grid search
-#
-# StratifiedKFold ensures that the proportion of compounds from each
-# activity bin is (approximately) the same in every train and val fold.
-# shuffle=True randomises fold assignment within each stratum.
+# Step 6 — 5-fold stratified CV grid search
 # ═══════════════════════════════════════════════════════════════════════════════
 param_combos = [
     dict(zip(PARAM_GRID.keys(), combo))
@@ -282,7 +352,6 @@ for combo_idx, params in enumerate(param_combos):
     print(f"\n[{combo_idx + 1}/{len(param_combos)}] {params}")
     fold_rmses, fold_epochs = [], []
 
-    # StratifiedKFold.split takes (X, y) where y are the stratum labels
     for fold_num, (train_idx, val_idx) in enumerate(skf.split(indices, strata)):
         fold_train = [all_train[i] for i in train_idx]
         fold_val   = [all_train[i] for i in val_idx]
@@ -323,23 +392,24 @@ best_params = {
     "ffn_n_layers":   int(best_row["ffn_n_layers"]),
     "dropout":        float(best_row["dropout"]),
 }
-# Add a 10 % epoch buffer: when training on more data the model typically
-# needs slightly more steps to converge to the same loss level.
+# 10 % epoch buffer: more data per epoch when training on the full set means
+# the model typically needs slightly more steps to reach equivalent convergence.
 final_epochs = max(int(best_row["mean_best_epoch"] * 1.1), 5)
 
 print(f"\nBest hyperparameters : {best_params}")
 print(f"Final model epochs   : {final_epochs}  (mean best epoch × 1.1)")
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Step 6 — Final model: train on ALL training data with best params
+# Step 7 — Final model: train on ALL training data with weights
 #
-# No validation split is needed here because:
-#   • Hyperparameters were already selected by CV.
-#   • The training duration (final_epochs) is set from CV, not from a live
-#     val_loss signal, so there is nothing to overfit to.
+# No validation split needed:
+#   • Hyperparameters fixed by CV.
+#   • Training duration fixed by CV (final_epochs).
+# Per-compound weights from pEC50_diff are embedded in the MoleculeDatapoints
+# and are automatically applied by Chemprop's weighted MSE loss.
 # ═══════════════════════════════════════════════════════════════════════════════
 print(f"\n{'='*60}")
-print(f"Training final model on all {len(all_train)} training compounds")
+print(f"Training final model on all {len(all_train)} training compounds (with weights)")
 print(f"{'='*60}")
 
 all_train_dset = data.MoleculeDataset(all_train, featurizer)
@@ -365,19 +435,14 @@ final_trainer = pl.Trainer(
 final_trainer.fit(final_mpnn, final_loader)
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Step 7 — Save final model as .pkl
-#
-# torch.save serialises the full model object (weights + architecture) using
-# pickle.  Load it back in any script with:
-#   model = torch.load("pxr_chemeleon_final.pkl", weights_only=False)
-#   model.eval()
+# Step 8 — Save final model as .pkl
 # ═══════════════════════════════════════════════════════════════════════════════
 print(f"\nSaving final model to {MODEL_PKL_PATH} ...")
 torch.save(final_mpnn, MODEL_PKL_PATH)
 print("  Saved.")
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Step 8 — Predict on the external test set
+# Step 9 — Predict on external test set
 # ═══════════════════════════════════════════════════════════════════════════════
 print(f"\nPredicting on external test set ({len(all_test)} molecules)...")
 final_mpnn.eval()
