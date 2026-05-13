@@ -388,8 +388,9 @@ test_loader = data.build_dataloader(test_dset, num_workers=NUM_WORKERS, shuffle=
 raw_preds = final_trainer.predict(final_mpnn, test_loader)
 preds     = torch.cat(raw_preds).numpy().flatten()
 
-actual = [float(d.y[0]) for d in all_test]
-smiles = [d.smi for d in all_test]
+from rdkit.Chem import MolToSmiles as _mts
+actual = df_test[TEST_TARGET_COL].values[: len(all_test)]
+smiles = [_mts(d.mol) for d in all_test]
 names  = df_test[TEST_NAME_COL].values[: len(all_test)]
 
 df_out = pd.DataFrame({
