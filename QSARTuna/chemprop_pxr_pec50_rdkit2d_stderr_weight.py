@@ -86,11 +86,12 @@ FINAL_LR = 1e-5
 STD_ERROR_COL = "std_error"
 MIN_STD_ERROR = 0.05   # clip floor — 306 compounds below this; caps weight at 1/0.05=20 before normalisation
 
-# FFN-only grid; BondMessagePassing architecture is fixed at ChemProp defaults
 PARAM_GRID = {
     "ffn_hidden_dim": [300, 512],
     "ffn_n_layers":   [2, 3],
     "dropout":        [0.0, 0.2],
+    "mp_depth":       [3, 4],      # message passing steps; Anvil best model used 4
+    "mp_hidden_dim":  [300, 1024], # encoder hidden width; Anvil best model used 2048
 }
 
 
@@ -160,7 +161,8 @@ def select_valid_columns(arr: np.ndarray) -> np.ndarray:
 
 # ── Build MPNN ─────────────────────────────────────────────────────────────────
 def build_mpnn(n_descriptors: int, ffn_hidden_dim: int, ffn_n_layers: int,
-               dropout: float, target_scaler) -> models.MPNN:
+               dropout: float, mp_depth: int, mp_hidden_dim: int,
+               target_scaler) -> models.MPNN:
     """
     Build a standard ChemProp MPNN with RDKit2D descriptors concatenated
     before the FFN.
@@ -170,17 +172,22 @@ def build_mpnn(n_descriptors: int, ffn_hidden_dim: int, ffn_n_layers: int,
 
     Parameters
     ----------
-    n_descriptors : number of kept RDKit descriptor columns
-    target_scaler : StandardScaler fitted on fold/full training targets;
-                    used to build the output UnscaleTransform
+    n_descriptors  : number of kept RDKit descriptor columns
+    mp_depth       : number of BondMessagePassing steps (Anvil best used 4)
+    mp_hidden_dim  : hidden dimension of the message-passing network (d_h)
+    target_scaler  : StandardScaler fitted on fold/full training targets;
+                     used to build the output UnscaleTransform
     """
     feat = featurizers.SimpleMoleculeMolGraphFeaturizer()
-    mp   = nn.BondMessagePassing(d_v=feat.atom_fdim, d_e=feat.bond_fdim)
+    mp   = nn.BondMessagePassing(
+               d_v=feat.atom_fdim, d_e=feat.bond_fdim,
+               depth=mp_depth, d_h=mp_hidden_dim,
+           )
     agg  = nn.MeanAggregation()
 
     output_transform = nn.UnscaleTransform.from_standard_scaler(target_scaler)
     ffn = nn.RegressionFFN(
-        input_dim=mp.output_dim + n_descriptors,   # 300 + n_descriptors
+        input_dim=mp.output_dim + n_descriptors,   # mp_hidden_dim + n_descriptors
         hidden_dim=ffn_hidden_dim,
         n_layers=ffn_n_layers,
         dropout=dropout,
