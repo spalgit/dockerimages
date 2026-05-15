@@ -1,27 +1,41 @@
 """
-ChemProp model for PXR pEC50 regression — RDKit 2D extra descriptors,
-uniform sample weights (no counter-screen weighting).
+ChemProp model for PXR pEC50 regression — RDKit 2D extra descriptors +
+measurement-uncertainty sample weighting (1/std_error).
 
-Standard ChemProp message-passing (NO foundation model) augmented with
-RDKit 2D molecular descriptors passed as molecule-level features (x_d).
-The descriptor vector is concatenated with the graph embedding before the
-FFN, giving the model explicit access to physicochemical properties.
+This is fundamentally different from multi-task learning with std_error:
 
-All training compounds have equal weight (1.0).  This isolates the effect
-of RDKit2D extra features from any weighting strategy.  Compare against:
-  - chemprop_pxr_pec50_rdkit2d_counter_weight.py  (same + counter weighting)
-  - chemprop_pxr_pec50_with_scalable_weights.py   (Chemeleon + pEC50_diff weighting)
+  Multi-task approach (tried, hurt rank):
+      std_error is an OUTPUT the model tries to predict alongside pEC50.
+      Splits model capacity between two objectives; adds noise to the
+      pEC50 learning signal.
+
+  This script — sample weighting (NOT multi-task):
+      std_error is METADATA about measurement quality.  The model still
+      predicts only pEC50.  Each compound's contribution to the MAE loss
+      is scaled by 1/std_error so that precisely-measured compounds
+      (low std_error, high confidence) steer the gradient more than
+      noisy single-replicate measurements (high std_error).
+
+      Weight = 1/std_error, normalised to mean = 1.0 across the training
+      set so the effective learning rate is preserved.
+      Weight range after normalisation: ~0.16 – 2.34.
+      All 4,140 training compounds have std_error → no neutral fallback needed.
+
+Architecture: standard ChemProp MPNN (no foundation model) + RDKit 2D x_d
+              + MAE loss + slow LR — same as chemprop_pxr_pec50_rdkit2d_features.py
+              except for the weighting.
 
 Pipeline:
-  1. Compute 217 RDKit 2D descriptors; drop NaN/inf/zero-variance columns.
-  2. Per-fold StandardScaler on x_d (fit on train, apply to val) — no leakage.
-  3. 5-fold stratified CV grid search over FFN hyperparameters.
-  4. Retrain final model on ALL training data; scale test x_d with same scaler.
-  5. Predict on external test set and report metrics.
+  1. Compute per-compound weights: normalised 1/std_error.
+  2. Compute 217 RDKit 2D descriptors; drop NaN/inf/zero-variance columns.
+  3. Per-fold StandardScaler on x_d (fit on train, apply to val) — no leakage.
+  4. 5-fold stratified CV grid search over FFN hyperparameters.
+  5. Retrain final model on ALL training data.
+  6. Predict on external test set.
 
 Usage:
     conda activate chemprop
-    python ~/dockerimages/QSARTuna/chemprop_pxr_pec50_rdkit2d_features.py
+    python ~/dockerimages/QSARTuna/chemprop_pxr_pec50_rdkit2d_stderr_weight.py
 """
 
 import itertools
@@ -45,13 +59,11 @@ TRAIN_PATH = Path(
     "processed_Openadmet_REAL_PXR_train_AND_test_main_with_side_info_"
     "AND_counter_screen_weighted.csv"
 )
-TEST_PATH = Path(
-    "~/dockerimages/QSARTuna/PXR/Prediction_OpenAdmet_ChemProp_Only_OpenADMET_Data.csv"
-)
-MODEL_PKL_PATH  = Path.home() / "pxr_chemprop_rdkit2d_final.pkl"
-CV_RESULTS_PATH = Path.home() / "pxr_rdkit2d_cv_results.csv"
-OUTPUT_PREDS    = Path.home() / "pxr_rdkit2d_external_test_predictions.csv"
-KEPT_DESCS_PATH = Path.home() / "pxr_rdkit2d_kept_descriptors.txt"
+TEST_PATH = Path.home() / "dockerimages/QSARTuna/PXR/Prediction_OpenAdmet_ChemProp_Only_OpenADMET_Data.csv"
+MODEL_PKL_PATH  = Path.home() / "pxr_chemprop_rdkit2d_stderr_weight_final.pkl"
+CV_RESULTS_PATH = Path.home() / "pxr_rdkit2d_stderr_weight_cv_results.csv"
+OUTPUT_PREDS    = Path.home() / "pxr_rdkit2d_stderr_weight_test_predictions.csv"
+KEPT_DESCS_PATH = Path.home() / "pxr_rdkit2d_stderr_weight_kept_descriptors.txt"
 
 TRAIN_SMILES_COL = "SMILES"
 TRAIN_TARGET_COL = "pEC50"
@@ -70,6 +82,9 @@ NUM_WORKERS   = 0
 INIT_LR  = 1e-4
 MAX_LR   = 2e-4
 FINAL_LR = 1e-5
+
+STD_ERROR_COL = "std_error"
+MIN_STD_ERROR = 0.05   # clip floor — 306 compounds below this; caps weight at 1/0.05=20 before normalisation
 
 # FFN-only grid; BondMessagePassing architecture is fixed at ChemProp defaults
 PARAM_GRID = {
@@ -92,6 +107,20 @@ class BestEpochTracker(pl.Callback):
         if val_loss < self.best_val_loss:
             self.best_val_loss = val_loss
             self.best_epoch    = trainer.current_epoch
+
+
+# ── Sample weight from measurement uncertainty ────────────────────────────────
+def compute_weights(std_error_values: np.ndarray) -> np.ndarray:
+    """
+    Weight = 1 / clip(std_error, MIN_STD_ERROR), normalised to mean = 1.0.
+
+    Clipping prevents a handful of very precise measurements from dominating.
+    Normalisation keeps the effective learning rate unchanged.
+    All compounds are retained — only the weight magnitude is capped.
+    """
+    clipped    = np.clip(std_error_values, MIN_STD_ERROR, None)
+    raw        = 1.0 / clipped
+    return raw / raw.mean()
 
 
 # ── RDKit 2D descriptor utilities ─────────────────────────────────────────────
@@ -233,23 +262,37 @@ def run_fold(fold_idx, train_mols, train_targets, train_weights, train_x_d,
 # ══════════════════════════════════════════════════════════════════════════════
 print(f"\nLoading training data:\n  {TRAIN_PATH}")
 df_train = pd.read_csv(TRAIN_PATH)
-print(f"  {len(df_train)} rows  |  uniform sample weights (no counter-screen weighting)")
+print(f"  {len(df_train)} rows  |  sample weights = 1/std_error (normalised to mean=1.0)")
 
-# Parse SMILES → keep only valid mols
+# Parse SMILES → keep only valid mols; collect std_error alongside targets
 print("\nParsing training SMILES...")
-train_mols, train_smiles, train_targets = [], [], []
-for smi, y in zip(df_train[TRAIN_SMILES_COL].values, df_train[TRAIN_TARGET_COL].values):
+train_mols, train_smiles, train_targets, train_stderr = [], [], [], []
+for smi, y, se in zip(df_train[TRAIN_SMILES_COL].values,
+                      df_train[TRAIN_TARGET_COL].values,
+                      df_train[STD_ERROR_COL].values):
     mol = Chem.MolFromSmiles(smi)
     if mol is not None:
         train_mols.append(mol)
         train_smiles.append(smi)
         train_targets.append(y)
+        train_stderr.append(se)
     else:
         print(f"  Skipped unparseable SMILES: {smi[:40]}")
 
-train_targets      = np.array(train_targets)
-train_weights_ones = np.ones(len(train_mols))   # uniform weights
-print(f"  Usable training molecules: {len(train_mols)}")
+train_targets = np.array(train_targets)
+train_stderr  = np.array(train_stderr, dtype=float)
+
+# Compute 1/std_error weights (clipped + normalised)
+train_weights_stderr = compute_weights(train_stderr)
+n_clipped = (train_stderr < MIN_STD_ERROR).sum()
+
+print(f"  Usable training molecules : {len(train_mols)}")
+print(f"  std_error range           : {train_stderr.min():.3f} – {train_stderr.max():.3f}  "
+      f"(mean={train_stderr.mean():.3f})")
+print(f"  Compounds clipped at {MIN_STD_ERROR} std_error : {n_clipped}  "
+      f"(weight capped, NOT removed)")
+print(f"  Weight range after norm   : {train_weights_stderr.min():.3f} – "
+      f"{train_weights_stderr.max():.3f}  (mean={train_weights_stderr.mean():.3f})")
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Step 2 — Load and parse test data
@@ -335,11 +378,11 @@ for combo_idx, params in enumerate(param_combos):
             fold_num,
             [train_mols[i] for i in tr_idx],
             train_targets[tr_idx],
-            train_weights_ones[tr_idx],
+            train_weights_stderr[tr_idx],
             x_d_tr,
             [train_mols[i] for i in va_idx],
             train_targets[va_idx],
-            train_weights_ones[va_idx],
+            train_weights_stderr[va_idx],
             x_d_va,
             n_descriptors,
             params,
@@ -392,7 +435,7 @@ x_d_test_scaled  = final_xd_scaler.transform(x_d_test_raw)
 feat = featurizers.SimpleMoleculeMolGraphFeaturizer()
 
 all_train_dps = make_datapoints(
-    train_mols, train_targets, train_weights_ones, x_d_train_scaled
+    train_mols, train_targets, train_weights_stderr, x_d_train_scaled
 )
 all_train_dset  = data.MoleculeDataset(all_train_dps, feat)
 final_scaler    = all_train_dset.normalize_targets()

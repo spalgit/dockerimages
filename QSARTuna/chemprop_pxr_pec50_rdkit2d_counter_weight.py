@@ -53,7 +53,7 @@ TRAIN_PATH = Path(
     "AND_counter_screen_weighted.csv"
 )
 TEST_PATH = Path(
-    "/home/spal/OpenAdmet/Prediction_OpenAdmet_ChemProp_Only_OpenADMET_Data.csv"
+    "~/dockerimages/QSARTuna/PXR/Prediction_OpenAdmet_ChemProp_Only_OpenADMET_Data.csv"
 )
 MODEL_PKL_PATH  = Path.home() / "pxr_chemprop_rdkit2d_counter_weight_final.pkl"
 CV_RESULTS_PATH = Path.home() / "pxr_rdkit2d_counter_weight_cv_results.csv"
