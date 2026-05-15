@@ -196,7 +196,7 @@ def build_mpnn(n_descriptors: int, ffn_hidden_dim: int, ffn_n_layers: int,
     )
     return models.MPNN(
         mp, agg, ffn,
-        batch_norm=False,
+        batch_norm=True,
         metrics=[nn.metrics.RMSE(), nn.metrics.MAE()],
         init_lr=INIT_LR,
         max_lr=MAX_LR,
