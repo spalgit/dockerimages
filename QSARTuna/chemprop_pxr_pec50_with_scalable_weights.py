@@ -192,6 +192,7 @@ def build_mpnn(chemeleon_hyper, chemeleon_state, ffn_hidden_dim, ffn_n_layers,
         hidden_dim=ffn_hidden_dim,
         n_layers=ffn_n_layers,
         dropout=dropout,
+        criterion=nn.metrics.MAE(),
         output_transform=output_transform,
     )
 
@@ -278,7 +279,11 @@ print(f"  pEC50 range : {df_train[TRAIN_TARGET_COL].min():.2f} – "
       f"{df_train[TRAIN_TARGET_COL].max():.2f}")
 
 # ── Compute scalable weights from pEC50_diff ──────────────────────────────────
-diff_values = df_train[DIFF_COL].values   # NaN where no counter screen
+# Recompute diff on-the-fly rather than reading the stored column.
+# The stored pEC50_diff column is NaN for 805 compounds that have both pEC50
+# and pEC50_counter available, due to an upstream processing step. Recomputing
+# directly recovers all 2,648 matched pairs instead of only 1,843.
+diff_values = df_train[TRAIN_TARGET_COL].values - df_train["pEC50_counter"].values
 train_weights = compute_weights(diff_values)
 
 n_with_counter = (~np.isnan(diff_values)).sum()
