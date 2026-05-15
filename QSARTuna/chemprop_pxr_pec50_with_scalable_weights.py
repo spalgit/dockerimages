@@ -87,6 +87,13 @@ PARAM_GRID = {
     "dropout":        [0.0, 0.2],
 }
 
+# Learning rate schedule — deliberately lower than ChemProp default (max_lr=1e-3).
+# A high LR overwrites the pretrained CheMeleon message-passing weights too
+# aggressively, which caused the rank drop from 50 to 163 in the fast-LR run.
+INIT_LR  = 1e-4
+MAX_LR   = 2e-4
+FINAL_LR = 1e-5
+
 
 # ── Custom callback — records epoch with lowest val loss ──────────────────────
 class BestEpochTracker(pl.Callback):
@@ -192,6 +199,9 @@ def build_mpnn(chemeleon_hyper, chemeleon_state, ffn_hidden_dim, ffn_n_layers,
         mp, agg, ffn,
         batch_norm=False,
         metrics=[nn.metrics.RMSE(), nn.metrics.MAE()],
+        init_lr=INIT_LR,
+        max_lr=MAX_LR,
+        final_lr=FINAL_LR,
     )
 
 
