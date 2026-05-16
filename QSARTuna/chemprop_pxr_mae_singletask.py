@@ -13,10 +13,11 @@ Architecture (fixed — no grid search):
   criterion          : MAE   ← key change vs rank-50 model
 
 Pipeline:
-  1. 5-fold stratified CV — records best epoch per fold, estimates MAE.
+  1. 5-fold scaffold CV — Bemis-Murcko scaffolds are kept whole within
+     each fold, so no scaffold appears in both train and val. This gives
+     a realistic estimate of generalisation to novel chemical series.
   2. Final model trained on ALL training data for mean_best_epoch × 1.1
-     epochs (no val set; early stopping not needed because duration is
-     derived from CV).
+     epochs (no val set; duration derived from CV).
   3. Predict on competition test set; write submission CSV.
 
 Training data : processed_Openadmet_REAL_ChemBL_PXR_train_AND_test_main_
@@ -29,6 +30,7 @@ Usage:
     python chemprop_pxr_mae_singletask.py
 """
 
+from collections import defaultdict
 from pathlib import Path
 
 import numpy as np
@@ -36,8 +38,9 @@ import pandas as pd
 import torch
 from lightning import pytorch as pl
 from lightning.pytorch.callbacks import EarlyStopping
+from rdkit import Chem
+from rdkit.Chem.Scaffolds import MurckoScaffold
 from scipy import stats
-from sklearn.model_selection import StratifiedKFold
 
 from chemprop import data, featurizers, models, nn
 
@@ -67,7 +70,6 @@ BATCH_NORM      = True
 
 # ── Training ───────────────────────────────────────────────────────────────────
 N_FOLDS       = 5
-N_STRATA_BINS = 5
 CV_MAX_EPOCHS = 200
 CV_PATIENCE   = 30       # generous patience to allow MAE loss to converge
 FINAL_EPOCH_BUFFER = 1.1 # multiply mean CV best-epoch by this for final run
@@ -119,6 +121,52 @@ def build_mpnn(target_scaler) -> models.MPNN:
         max_lr=MAX_LR,
         final_lr=FINAL_LR,
     )
+
+
+# ── Scaffold K-fold split ──────────────────────────────────────────────────────
+def scaffold_kfold_indices(datapoints, n_splits=5):
+    """
+    Yield (train_indices, val_indices) for each of n_splits scaffold folds.
+
+    All molecules sharing the same Bemis-Murcko scaffold are placed in the
+    same fold, so no scaffold leaks from val into train. Scaffold groups are
+    assigned greedily to the smallest fold at each step to keep fold sizes
+    as balanced as possible.
+
+    Singleton scaffolds (unique to one molecule) are pooled together and
+    treated as a single group before assignment, preventing them from each
+    individually inflating whichever fold they land in.
+    """
+    # Compute generic Murcko scaffold SMILES for every molecule
+    scaffold_to_idx = defaultdict(list)
+    for i, dp in enumerate(datapoints):
+        smi = Chem.MolToSmiles(dp.mol)
+        try:
+            scaffold = MurckoScaffold.MurckoScaffoldSmiles(
+                smiles=smi, includeChirality=False
+            )
+        except Exception:
+            scaffold = smi          # fall back to full SMILES if scaffold fails
+        scaffold_to_idx[scaffold].append(i)
+
+    # Sort largest scaffold group first; greedy assignment then distributes
+    # singletons (one molecule per scaffold) roughly evenly across folds
+    groups = sorted(scaffold_to_idx.values(), key=len, reverse=True)
+
+    # Greedy assignment: always extend the fold with fewest molecules
+    fold_buckets = [[] for _ in range(n_splits)]
+    fold_sizes   = [0] * n_splits
+    for group in groups:
+        smallest = int(np.argmin(fold_sizes))
+        fold_buckets[smallest].extend(group)
+        fold_sizes[smallest] += len(group)
+
+    for val_fold in range(n_splits):
+        val_idx   = np.array(fold_buckets[val_fold])
+        train_idx = np.array([i for f in range(n_splits)
+                               if f != val_fold
+                               for i in fold_buckets[f]])
+        yield train_idx, val_idx
 
 
 # ── Data loading ───────────────────────────────────────────────────────────────
@@ -206,43 +254,35 @@ print(f"  Test molecules   : {len(test_points)}")
 featurizer = featurizers.SimpleMoleculeMolGraphFeaturizer()
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Step 3 — 5-fold stratified CV (skip if results file already exists)
+# Step 3 — 5-fold scaffold CV (skip if results file already exists)
 # ══════════════════════════════════════════════════════════════════════════════
 if CV_RESULTS_PATH.exists():
     print(f"\nCV results found — loading from {CV_RESULTS_PATH}")
     df_cv = pd.read_csv(CV_RESULTS_PATH)
 else:
-    strata = pd.qcut(pec50_vals, q=N_STRATA_BINS, labels=False,
-                     duplicates="drop").astype(int)
-    print(f"\nStratification ({N_STRATA_BINS} equal-frequency bins):")
-    for b in range(strata.max() + 1):
-        m = strata == b
-        print(f"  Bin {b}: n={m.sum():4d}  "
-              f"pEC50 {pec50_vals[m].min():.2f}–{pec50_vals[m].max():.2f}")
-
     print(f"\n{'='*60}")
-    print(f"5-fold stratified CV  |  max_epochs={CV_MAX_EPOCHS}  patience={CV_PATIENCE}")
+    print(f"5-fold scaffold CV  |  max_epochs={CV_MAX_EPOCHS}  patience={CV_PATIENCE}")
     print(f"Architecture: depth={MP_DEPTH}  mp_hidden={MP_HIDDEN_DIM}  "
           f"ffn_hidden={FFN_HIDDEN_DIM}  ffn_layers={FFN_NUM_LAYERS}  "
           f"dropout={DROPOUT}  criterion=MAE")
     print(f"{'='*60}")
 
-    skf     = StratifiedKFold(n_splits=N_FOLDS, shuffle=True, random_state=42)
-    indices = np.arange(len(all_points))
-    rows    = []
-
-    for fold_num, (tr_idx, va_idx) in enumerate(skf.split(indices, strata)):
+    rows = []
+    for fold_num, (tr_idx, va_idx) in enumerate(
+        scaffold_kfold_indices(all_points, n_splits=N_FOLDS)
+    ):
         fold_train = [all_points[i] for i in tr_idx]
         fold_val   = [all_points[i] for i in va_idx]
+        print(f"\nFold {fold_num+1}: train={len(fold_train)}  val={len(fold_val)}")
 
         val_loss, best_epoch, mae, rmse, r2, sp = run_fold(
             fold_train, fold_val, featurizer,
             max_epochs=CV_MAX_EPOCHS, patience=CV_PATIENCE,
         )
-        print(f"  Fold {fold_num+1}: best_epoch={best_epoch:3d}  "
+        print(f"  best_epoch={best_epoch:3d}  "
               f"MAE={mae:.4f}  RMSE={rmse:.4f}  R2={r2:.4f}  Spearman={sp:.4f}")
-        rows.append(dict(fold=fold_num+1, best_epoch=best_epoch,
-                         mae=mae, rmse=rmse, r2=r2, spearman=sp))
+        rows.append(dict(fold=fold_num+1, train_n=len(fold_train), val_n=len(fold_val),
+                         best_epoch=best_epoch, mae=mae, rmse=rmse, r2=r2, spearman=sp))
 
     df_cv = pd.DataFrame(rows)
     df_cv.to_csv(CV_RESULTS_PATH, index=False)
