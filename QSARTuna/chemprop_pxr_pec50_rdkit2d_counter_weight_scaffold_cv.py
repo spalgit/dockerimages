@@ -1,39 +1,41 @@
 """
-ChemProp model for PXR pEC50 regression — RDKit 2D descriptors +
-counter-assay absolute weighting.
+ChemProp PXR pEC50 — RDKit 2D descriptors + counter-assay weighting
+                     with 5-fold SCAFFOLD cross-validation.
 
-Same architecture as chemprop_pxr_pec50_rdkit2d_features.py (standard
-ChemProp MPNN from scratch + RDKit 2D x_d, MAE loss, slow LR), but with
-a different weighting strategy:
+Identical to chemprop_pxr_pec50_rdkit2d_counter_weight.py in all modelling
+choices (architecture grid, weighting scheme, MAE criterion, slow LR) but
+replaces StratifiedKFold with Bemis-Murcko scaffold K-fold splitting.
 
-  pEC50_diff scheme  (other script): weight from main − counter difference
-                                     covers 1,843 / 4,140 compounds (44 %)
-  pEC50_counter scheme (this script): weight from absolute counter potency
-                                      covers 2,648 / 4,140 compounds (64 %)
+Why scaffold CV?
+  Stratified split lets the same scaffold appear in both train and val,
+  so val loss is optimistic and hyperparameter selection can favour configs
+  that overfit scaffold-specific patterns.  Scaffold splitting keeps every
+  scaffold whole within one fold, giving a realistic estimate of how well
+  the model generalises to the novel chemical series present in the
+  competition test set.
 
-Here the weight is an INVERSE linear map of pEC50_counter:
-  • pEC50_counter_min → MAX_WEIGHT  (least active in counter = most selective)
-  • pEC50_counter_max → MIN_WEIGHT  (most active in counter = promiscuous)
-  • NaN (no counter data)           → NEUTRAL_WEIGHT
+Two additional tweaks vs the original:
+  • CV_MAX_EPOCHS 50  → 200  (slow LR of 2e-4 needs many steps to converge)
+  • CV_PATIENCE    10  → 30   (avoids stopping before the plateau is reached)
 
-This covers 805 more compounds than the diff-based scheme because it only
-requires the counter assay value, not both assays simultaneously.
+Weighting scheme (unchanged):
+  pEC50_counter_min → MAX_WEIGHT=2.0  (selective compounds, trust more)
+  pEC50_counter_max → MIN_WEIGHT=0.5  (promiscuous, trust less)
+  NaN               → NEUTRAL_WEIGHT=1.0
 
-Pipeline:
-  1. Compute 217 RDKit 2D descriptors; drop NaN/inf/zero-variance columns.
-  2. Per-fold StandardScaler on x_d (fit on train, apply to val) — no leakage.
-  3. 5-fold scaffold CV grid search over FFN hyperparameters (Bemis-Murcko
-     scaffolds kept whole within each fold — no scaffold leaks between train
-     and val, giving a realistic estimate of novel-scaffold generalisation).
-  4. Retrain final model on ALL training data; scale test x_d with same scaler.
-  5. Predict on external test set and report metrics.
+Output:
+  ~/pxr_rdkit2d_cw_scaffold_cv_results.csv   — grid-search results
+  ~/pxr_rdkit2d_cw_scaffold_final.pkl        — saved final model
+  ~/pxr_rdkit2d_cw_scaffold_kept_descs.txt   — descriptor names kept
+  ~/OpenAdmet/Submission_CW_Scaffold_CV.csv  — competition submission
 
 Usage:
     conda activate chemprop
-    python ~/dockerimages/QSARTuna/chemprop_pxr_pec50_rdkit2d_counter_weight.py
+    python ~/dockerimages/QSARTuna/chemprop_pxr_pec50_rdkit2d_counter_weight_scaffold_cv.py
 """
 
 import itertools
+from collections import defaultdict
 from pathlib import Path
 
 import numpy as np
@@ -43,42 +45,40 @@ from lightning import pytorch as pl
 from lightning.pytorch.callbacks import EarlyStopping
 from rdkit import Chem
 from rdkit.Chem import Descriptors
-from sklearn.model_selection import StratifiedKFold
+from rdkit.Chem.Scaffolds import MurckoScaffold
 from sklearn.preprocessing import StandardScaler
 
 from chemprop import data, featurizers, models, nn
 
-# ── Configuration ──────────────────────────────────────────────────────────────
+# ── Paths ──────────────────────────────────────────────────────────────────────
 TRAIN_PATH = Path(
     "/home/spal/dockerimages/QSARTuna/PXR_For_QSARTuna_Modelling/"
     "processed_Openadmet_REAL_PXR_train_AND_test_main_with_side_info_"
     "AND_counter_screen_weighted.csv"
 )
-TEST_PATH = Path.home() / "dockerimages/QSARTuna/PXR/Prediction_OpenAdmet_ChemProp_Only_OpenADMET_Data.csv"
-MODEL_PKL_PATH  = Path.home() / "pxr_chemprop_rdkit2d_counter_weight_final.pkl"
-CV_RESULTS_PATH = Path.home() / "pxr_rdkit2d_counter_weight_cv_results.csv"
-OUTPUT_PREDS    = Path.home() / "pxr_rdkit2d_counter_weight_test_predictions.csv"
-KEPT_DESCS_PATH = Path.home() / "pxr_rdkit2d_counter_weight_kept_descriptors.txt"
+TEST_PATH       = Path.home() / "dockerimages/QSARTuna/PXR/test.csv"
+MODEL_PKL_PATH  = Path.home() / "pxr_rdkit2d_cw_scaffold_final.pkl"
+CV_RESULTS_PATH = Path.home() / "pxr_rdkit2d_cw_scaffold_cv_results.csv"
+KEPT_DESCS_PATH = Path.home() / "pxr_rdkit2d_cw_scaffold_kept_descs.txt"
+SUBMISSION_PATH = Path.home() / "OpenAdmet/Submission_CW_Scaffold_CV.csv"
 
 TRAIN_SMILES_COL = "SMILES"
 TRAIN_TARGET_COL = "pEC50"
-COUNTER_COL      = "pEC50_counter"   # absolute counter-screen potency
+COUNTER_COL      = "pEC50_counter"
 TEST_SMILES_COL  = "SMILES"
-TEST_TARGET_COL  = "pEC50"
 TEST_NAME_COL    = "Molecule Name"
 
+# ── Weighting ──────────────────────────────────────────────────────────────────
 MIN_WEIGHT     = 0.5
 MAX_WEIGHT     = 2.0
-NEUTRAL_WEIGHT = 1.0   # compounds without a counter screen
+NEUTRAL_WEIGHT = 1.0
 
+# ── CV / training settings ─────────────────────────────────────────────────────
 N_FOLDS       = 5
-N_STRATA_BINS = N_FOLDS
-# Training from scratch needs more epochs than fine-tuning a pretrained backbone
-CV_MAX_EPOCHS = 50
-CV_PATIENCE   = 10
+CV_MAX_EPOCHS = 200   # generous budget — slow LR (2e-4) needs many steps
+CV_PATIENCE   = 30    # generous patience to reach true convergence
 NUM_WORKERS   = 0
 
-# Slow LR — same values used in the Chemeleon weighted variant
 INIT_LR  = 1e-4
 MAX_LR   = 2e-4
 FINAL_LR = 1e-5
@@ -87,15 +87,13 @@ PARAM_GRID = {
     "ffn_hidden_dim": [300, 512],
     "ffn_n_layers":   [2, 3],
     "dropout":        [0.0, 0.2],
-    "mp_depth":       [3, 4],      # message passing steps
-    "mp_hidden_dim":  [300, 1024], # encoder hidden width
+    "mp_depth":       [3, 4],
+    "mp_hidden_dim":  [300, 1024],
 }
 
 
-# ── Callback: track best validation epoch ─────────────────────────────────────
+# ── Best-epoch tracker ─────────────────────────────────────────────────────────
 class BestEpochTracker(pl.Callback):
-    """Records the epoch with the lowest val_loss across a training run."""
-
     def __init__(self):
         self.best_val_loss = float("inf")
         self.best_epoch    = 0
@@ -107,16 +105,12 @@ class BestEpochTracker(pl.Callback):
             self.best_epoch    = trainer.current_epoch
 
 
-# ── RDKit 2D descriptor utilities ─────────────────────────────────────────────
-_DESC_LIST  = [(name, fn) for name, fn in Descriptors.descList]
+# ── RDKit 2D descriptors ───────────────────────────────────────────────────────
+_DESC_LIST     = [(name, fn) for name, fn in Descriptors.descList]
 ALL_DESC_NAMES = [name for name, _ in _DESC_LIST]
 
 
 def compute_rdkit_descriptors(mols: list) -> np.ndarray:
-    """
-    Compute all 217 RDKit 2D descriptors for each mol.
-    Returns shape (n_mols, 217). Failed descriptor calls → NaN.
-    """
     rows = []
     for mol in mols:
         row = []
@@ -131,12 +125,7 @@ def compute_rdkit_descriptors(mols: list) -> np.ndarray:
 
 
 def select_valid_columns(arr: np.ndarray) -> np.ndarray:
-    """
-    Boolean column mask: keep columns that are finite for ALL molecules
-    and have nonzero variance across the training set.
-    This mask is derived from training data only and applied to test data
-    to avoid leakage.
-    """
+    """Keep columns finite for all molecules and with nonzero variance (train only)."""
     finite = np.all(np.isfinite(arr), axis=0)
     varied = np.var(arr, axis=0) > 0
     return finite & varied
@@ -144,33 +133,55 @@ def select_valid_columns(arr: np.ndarray) -> np.ndarray:
 
 # ── Counter-screen weighting ───────────────────────────────────────────────────
 def compute_weights(counter_values: np.ndarray) -> np.ndarray:
-    """
-    Scale pEC50_counter INVERSELY to [MIN_WEIGHT, MAX_WEIGHT].
-
-    A compound with LOW counter-screen potency is selective for PXR and should
-    be trusted more; a compound with HIGH counter-screen potency is promiscuous
-    and should contribute less to the gradient.
-
-      pEC50_counter_min  →  MAX_WEIGHT  (least active in counter = most selective)
-      pEC50_counter_max  →  MIN_WEIGHT  (most active in counter = promiscuous)
-      NaN                →  NEUTRAL_WEIGHT (no counter data available)
-
-    Using pEC50_counter directly (rather than pEC50_diff) weights 2,648 of 4,140
-    compounds (64 %) instead of only 1,843 (44 %), because it requires only the
-    counter assay value, not both assays simultaneously.
-    """
-    weights = np.full(len(counter_values), NEUTRAL_WEIGHT, dtype=float)
+    weights     = np.full(len(counter_values), NEUTRAL_WEIGHT, dtype=float)
     has_counter = ~np.isnan(counter_values)
-    vals = counter_values[has_counter]
+    vals        = counter_values[has_counter]
     c_min, c_max = vals.min(), vals.max()
-    # Invert: subtract from c_max so high counter potency → low weight
     weights[has_counter] = MIN_WEIGHT + (MAX_WEIGHT - MIN_WEIGHT) * (
         (c_max - vals) / (c_max - c_min)
     )
     return weights
 
 
-# ── Build MPNN ─────────────────────────────────────────────────────────────────
+# ── Scaffold K-fold splitter ───────────────────────────────────────────────────
+def scaffold_kfold_indices(mols: list, n_splits: int = 5):
+    """
+    Yield (train_indices, val_indices) for each of n_splits scaffold folds.
+
+    All molecules sharing the same Bemis-Murcko scaffold are placed in the
+    same fold.  Scaffold groups are assigned greedily to the smallest fold
+    at each step to keep fold sizes as balanced as possible.
+    """
+    scaffold_to_idx = defaultdict(list)
+    for i, mol in enumerate(mols):
+        smi = Chem.MolToSmiles(mol)
+        try:
+            scaffold = MurckoScaffold.MurckoScaffoldSmiles(
+                smiles=smi, includeChirality=False
+            )
+        except Exception:
+            scaffold = smi
+        scaffold_to_idx[scaffold].append(i)
+
+    # Sort largest group first for stable greedy assignment
+    groups = sorted(scaffold_to_idx.values(), key=len, reverse=True)
+
+    fold_buckets = [[] for _ in range(n_splits)]
+    fold_sizes   = [0]  * n_splits
+    for group in groups:
+        smallest = int(np.argmin(fold_sizes))
+        fold_buckets[smallest].extend(group)
+        fold_sizes[smallest] += len(group)
+
+    for val_fold in range(n_splits):
+        val_idx   = np.array(fold_buckets[val_fold])
+        train_idx = np.array([i for f in range(n_splits)
+                               if f != val_fold
+                               for i in fold_buckets[f]])
+        yield train_idx, val_idx
+
+
+# ── MPNN factory ──────────────────────────────────────────────────────────────
 def build_mpnn(n_descriptors: int, ffn_hidden_dim: int, ffn_n_layers: int,
                dropout: float, mp_depth: int, mp_hidden_dim: int,
                target_scaler) -> models.MPNN:
@@ -180,16 +191,15 @@ def build_mpnn(n_descriptors: int, ffn_hidden_dim: int, ffn_n_layers: int,
                depth=mp_depth, d_h=mp_hidden_dim,
            )
     agg  = nn.MeanAggregation()
-
     output_transform = nn.UnscaleTransform.from_standard_scaler(target_scaler)
-    ffn = nn.RegressionFFN(
-        input_dim=mp.output_dim + n_descriptors,
-        hidden_dim=ffn_hidden_dim,
-        n_layers=ffn_n_layers,
-        dropout=dropout,
-        criterion=nn.metrics.MAE(),
-        output_transform=output_transform,
-    )
+    ffn  = nn.RegressionFFN(
+               input_dim=mp.output_dim + n_descriptors,
+               hidden_dim=ffn_hidden_dim,
+               n_layers=ffn_n_layers,
+               dropout=dropout,
+               criterion=nn.metrics.MAE(),
+               output_transform=output_transform,
+           )
     return models.MPNN(
         mp, agg, ffn,
         batch_norm=True,
@@ -200,9 +210,8 @@ def build_mpnn(n_descriptors: int, ffn_hidden_dim: int, ffn_n_layers: int,
     )
 
 
-# ── Build datapoints ───────────────────────────────────────────────────────────
+# ── Datapoint builder ──────────────────────────────────────────────────────────
 def make_datapoints(mols, targets, weights, x_d):
-    """Zip mol objects, targets, weights, and pre-scaled x_d into datapoints."""
     return [
         data.MoleculeDatapoint(
             mol=mol,
@@ -214,19 +223,11 @@ def make_datapoints(mols, targets, weights, x_d):
     ]
 
 
-# ── CV fold runner ─────────────────────────────────────────────────────────────
-def run_fold(fold_idx, train_mols, train_targets, train_weights, train_x_d,
+# ── Single fold runner ─────────────────────────────────────────────────────────
+def run_fold(train_mols, train_targets, train_weights, train_x_d,
              val_mols,   val_targets,   val_weights,   val_x_d,
              n_descriptors, params, max_epochs, patience):
-    """
-    Train one stratified CV fold.
-
-    x_d arrays are already scaled for this fold (fit on fold-train, applied
-    to fold-val).  Target normalisation is handled inside this function via
-    ChemProp's normalize_targets() so it is fold-local and leak-free.
-
-    Returns (best_val_loss, best_epoch).
-    """
+    """Train one scaffold CV fold; return (best_val_mae, best_epoch)."""
     feat = featurizers.SimpleMoleculeMolGraphFeaturizer()
 
     train_dps = make_datapoints(train_mols, train_targets, train_weights, train_x_d)
@@ -241,9 +242,9 @@ def run_fold(fold_idx, train_mols, train_targets, train_weights, train_x_d,
     train_loader = data.build_dataloader(train_dset, num_workers=NUM_WORKERS)
     val_loader   = data.build_dataloader(val_dset,   num_workers=NUM_WORKERS, shuffle=False)
 
-    mpnn = build_mpnn(n_descriptors, **params, target_scaler=target_scaler)
-
+    mpnn          = build_mpnn(n_descriptors, **params, target_scaler=target_scaler)
     epoch_tracker = BestEpochTracker()
+
     trainer = pl.Trainer(
         logger=False,
         enable_checkpointing=False,
@@ -270,22 +271,20 @@ print(f"  {len(df_train)} rows")
 counter_values = df_train[COUNTER_COL].values
 train_weights  = compute_weights(counter_values)
 n_with_counter = (~np.isnan(counter_values)).sum()
-print(f"  Counter screen available : {n_with_counter}/{len(df_train)} compounds "
+print(f"  Counter screen available : {n_with_counter}/{len(df_train)} "
       f"({100*n_with_counter/len(df_train):.1f}%)")
 print(f"  pEC50_counter range      : "
       f"{np.nanmin(counter_values):.2f} – {np.nanmax(counter_values):.2f}  "
       f"(mean {np.nanmean(counter_values):.2f})")
-print(f"  Weight range             : {train_weights.min():.3f} – {train_weights.max():.3f}  "
+print(f"  Weight range             : "
+      f"{train_weights.min():.3f} – {train_weights.max():.3f}  "
       f"(neutral={NEUTRAL_WEIGHT})")
 
-# Parse SMILES → keep only valid mols
 print("\nParsing training SMILES...")
 train_mols, train_smiles, train_targets, train_weights_clean = [], [], [], []
-for smi, y, w in zip(
-    df_train[TRAIN_SMILES_COL].values,
-    df_train[TRAIN_TARGET_COL].values,
-    train_weights,
-):
+for smi, y, w in zip(df_train[TRAIN_SMILES_COL].values,
+                     df_train[TRAIN_TARGET_COL].values,
+                     train_weights):
     mol = Chem.MolFromSmiles(smi)
     if mol is not None:
         train_mols.append(mol)
@@ -295,68 +294,59 @@ for smi, y, w in zip(
     else:
         print(f"  Skipped unparseable SMILES: {smi[:40]}")
 
-train_targets = np.array(train_targets)
+train_targets       = np.array(train_targets)
 train_weights_clean = np.array(train_weights_clean)
 print(f"  Usable training molecules: {len(train_mols)}")
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Step 2 — Load and parse test data
+# Step 2 — Load competition test set (SMILES only, no labels)
 # ══════════════════════════════════════════════════════════════════════════════
-print(f"\nLoading test data:\n  {TEST_PATH}")
-df_test = pd.read_csv(TEST_PATH)
-test_mols, test_smiles, test_targets, test_names = [], [], [], []
+print(f"\nLoading competition test set:\n  {TEST_PATH}")
+df_test    = pd.read_csv(TEST_PATH)
+test_mols, test_smiles, test_names = [], [], []
 for _, row in df_test.iterrows():
     mol = Chem.MolFromSmiles(row[TEST_SMILES_COL])
     if mol is not None:
         test_mols.append(mol)
         test_smiles.append(row[TEST_SMILES_COL])
-        test_targets.append(row[TEST_TARGET_COL])
         test_names.append(row[TEST_NAME_COL])
-test_targets = np.array(test_targets)
 print(f"  Usable test molecules: {len(test_mols)}")
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Step 3 — Compute RDKit 2D descriptors; select valid columns from training set
+# Step 3 — RDKit 2D descriptors (column mask derived from training set only)
 # ══════════════════════════════════════════════════════════════════════════════
 print("\nComputing RDKit 2D descriptors for training set...")
-x_d_train_all = compute_rdkit_descriptors(train_mols)   # (n_train, 217)
-
-col_mask   = select_valid_columns(x_d_train_all)
-kept_names = [ALL_DESC_NAMES[i] for i, k in enumerate(col_mask) if k]
+x_d_train_all = compute_rdkit_descriptors(train_mols)
+col_mask      = select_valid_columns(x_d_train_all)
+kept_names    = [ALL_DESC_NAMES[i] for i, k in enumerate(col_mask) if k]
 print(f"  Kept {col_mask.sum()} / {len(col_mask)} descriptors "
       f"(dropped {(~col_mask).sum()} NaN/inf/zero-var columns)")
 
-x_d_train_raw = x_d_train_all[:, col_mask]   # (n_train, n_kept)
+x_d_train_raw = x_d_train_all[:, col_mask]
 n_descriptors = x_d_train_raw.shape[1]
 
-# Save kept descriptor names for reproducibility
 with open(KEPT_DESCS_PATH, "w") as fh:
     fh.write("\n".join(kept_names))
 print(f"  Descriptor names saved to {KEPT_DESCS_PATH}")
 
-print("\nComputing RDKit 2D descriptors for test set...")
+print("Computing RDKit 2D descriptors for test set...")
 x_d_test_all = compute_rdkit_descriptors(test_mols)
-x_d_test_raw = x_d_test_all[:, col_mask]     # (n_test, n_kept) — same columns
+x_d_test_raw = x_d_test_all[:, col_mask]
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Step 4 — Build stratification labels
+# Step 4 — Build scaffold folds once; reuse for all hyperparameter combos
 # ══════════════════════════════════════════════════════════════════════════════
-strata = pd.qcut(
-    train_targets, q=N_STRATA_BINS, labels=False, duplicates="drop"
-).astype(int)
-
-print(f"\nStratification ({N_STRATA_BINS} equal-frequency bins):")
-for b in range(strata.max() + 1):
-    mask = strata == b
-    print(f"  Bin {b}: n={mask.sum():4d}  "
-          f"pEC50 {train_targets[mask].min():.2f}–{train_targets[mask].max():.2f}")
+print(f"\nBuilding {N_FOLDS}-fold scaffold split...")
+scaffold_folds = list(scaffold_kfold_indices(train_mols, n_splits=N_FOLDS))
+for i, (tr_idx, va_idx) in enumerate(scaffold_folds):
+    print(f"  Fold {i+1}: train={len(tr_idx)}  val={len(va_idx)}")
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Step 5 — 5-fold stratified CV grid search (skipped if results already exist)
+# Step 5 — Scaffold CV grid search (skip if results already exist)
 # ══════════════════════════════════════════════════════════════════════════════
 if CV_RESULTS_PATH.exists():
     print(f"\nCV results found at {CV_RESULTS_PATH} — skipping grid search.")
-    df_cv = pd.read_csv(CV_RESULTS_PATH).sort_values("mean_val_rmse").reset_index(drop=True)
+    df_cv = pd.read_csv(CV_RESULTS_PATH).sort_values("mean_val_mae").reset_index(drop=True)
     print(f"\n{df_cv.to_string(index=False)}")
 else:
     param_combos = [
@@ -365,26 +355,24 @@ else:
     ]
 
     print(f"\n{'='*60}")
-    print(f"5-fold CV — {len(param_combos)} hyperparameter combos  |  "
-          f"n_descriptors={n_descriptors}")
+    print(f"5-fold scaffold CV — {len(param_combos)} combos  |  "
+          f"n_descriptors={n_descriptors}  "
+          f"max_epochs={CV_MAX_EPOCHS}  patience={CV_PATIENCE}")
     print(f"{'='*60}")
-
-    skf     = StratifiedKFold(n_splits=N_FOLDS, shuffle=True, random_state=42)
-    indices = np.arange(len(train_mols))
 
     cv_results = []
 
     for combo_idx, params in enumerate(param_combos):
-        print(f"\n[{combo_idx + 1}/{len(param_combos)}] {params}")
-        fold_rmses, fold_epochs = [], []
+        print(f"\n[{combo_idx+1}/{len(param_combos)}] {params}")
+        fold_maes, fold_epochs = [], []
 
-        for fold_num, (tr_idx, va_idx) in enumerate(skf.split(indices, strata)):
+        for fold_num, (tr_idx, va_idx) in enumerate(scaffold_folds):
+            # Fit x_d scaler on fold-train only; apply to fold-val
             xd_scaler = StandardScaler()
-            x_d_tr = xd_scaler.fit_transform(x_d_train_raw[tr_idx])
-            x_d_va = xd_scaler.transform(x_d_train_raw[va_idx])
+            x_d_tr    = xd_scaler.fit_transform(x_d_train_raw[tr_idx])
+            x_d_va    = xd_scaler.transform(x_d_train_raw[va_idx])
 
-            rmse, best_epoch = run_fold(
-                fold_num,
+            val_mae, best_epoch = run_fold(
                 [train_mols[i] for i in tr_idx],
                 train_targets[tr_idx],
                 train_weights_clean[tr_idx],
@@ -398,22 +386,22 @@ else:
                 max_epochs=CV_MAX_EPOCHS,
                 patience=CV_PATIENCE,
             )
-            fold_rmses.append(rmse)
+            fold_maes.append(val_mae)
             fold_epochs.append(best_epoch)
-            print(f"  Fold {fold_num + 1}: val_RMSE={rmse:.4f}  best_epoch={best_epoch}")
+            print(f"  Fold {fold_num+1}: val_MAE={val_mae:.4f}  best_epoch={best_epoch}")
 
-        mean_rmse  = float(np.mean(fold_rmses))
-        std_rmse   = float(np.std(fold_rmses))
+        mean_mae   = float(np.mean(fold_maes))
+        std_mae    = float(np.std(fold_maes))
         mean_epoch = int(np.mean(fold_epochs))
-        print(f"  → Mean val RMSE: {mean_rmse:.4f} ± {std_rmse:.4f}  "
+        print(f"  → Mean val MAE: {mean_mae:.4f} ± {std_mae:.4f}  "
               f"Mean best epoch: {mean_epoch}")
 
         cv_results.append({**params,
-                           "mean_val_rmse":   mean_rmse,
-                           "std_val_rmse":    std_rmse,
+                           "mean_val_mae":   mean_mae,
+                           "std_val_mae":    std_mae,
                            "mean_best_epoch": mean_epoch})
 
-    df_cv = pd.DataFrame(cv_results).sort_values("mean_val_rmse").reset_index(drop=True)
+    df_cv = pd.DataFrame(cv_results).sort_values("mean_val_mae").reset_index(drop=True)
     df_cv.to_csv(CV_RESULTS_PATH, index=False)
     print(f"\nCV results saved to {CV_RESULTS_PATH}")
     print(f"\n{df_cv.to_string(index=False)}")
@@ -429,32 +417,29 @@ best_params = {
 }
 final_epochs = max(int(best_row["mean_best_epoch"] * 1.1), 5)
 print(f"\nBest hyperparameters : {best_params}")
-print(f"Final model epochs   : {final_epochs}")
+print(f"Final model epochs   : {final_epochs}  (mean best epoch × 1.1)")
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Step 6 — Final model: train on ALL training data
+# Step 6 — Final model: all training data, best hyperparameters
 # ══════════════════════════════════════════════════════════════════════════════
 print(f"\n{'='*60}")
-print(f"Training final model on all {len(train_mols)} compounds")
+print(f"Training final model on all {len(train_mols)} compounds for {final_epochs} epochs")
 print(f"{'='*60}")
 
-# Fit a single x_d scaler on all training data; apply to test set
-final_xd_scaler = StandardScaler()
+final_xd_scaler  = StandardScaler()
 x_d_train_scaled = final_xd_scaler.fit_transform(x_d_train_raw)
 x_d_test_scaled  = final_xd_scaler.transform(x_d_test_raw)
 
 feat = featurizers.SimpleMoleculeMolGraphFeaturizer()
 
-all_train_dps = make_datapoints(
+all_train_dps  = make_datapoints(
     train_mols, train_targets, train_weights_clean, x_d_train_scaled
 )
-all_train_dset  = data.MoleculeDataset(all_train_dps, feat)
-final_scaler    = all_train_dset.normalize_targets()
-final_loader    = data.build_dataloader(all_train_dset, num_workers=NUM_WORKERS)
+all_train_dset = data.MoleculeDataset(all_train_dps, feat)
+final_scaler   = all_train_dset.normalize_targets()
+final_loader   = data.build_dataloader(all_train_dset, num_workers=NUM_WORKERS)
 
-final_mpnn = build_mpnn(
-    n_descriptors, **best_params, target_scaler=final_scaler
-)
+final_mpnn = build_mpnn(n_descriptors, **best_params, target_scaler=final_scaler)
 print("\nFinal model architecture:")
 print(final_mpnn)
 
@@ -471,36 +456,32 @@ final_trainer.fit(final_mpnn, final_loader)
 # ══════════════════════════════════════════════════════════════════════════════
 # Step 7 — Save model
 # ══════════════════════════════════════════════════════════════════════════════
-print(f"\nSaving model to {MODEL_PKL_PATH} ...")
 torch.save(final_mpnn, MODEL_PKL_PATH)
-print("  Saved.")
+print(f"\nModel saved to {MODEL_PKL_PATH}")
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Step 8 — Predict on external test set
+# Step 8 — Predict on competition test set and write submission
 # ══════════════════════════════════════════════════════════════════════════════
-print(f"\nPredicting on test set ({len(test_mols)} molecules)...")
+print(f"\nPredicting on {len(test_mols)} competition test molecules...")
 final_mpnn.eval()
 
-# Test data uses x_d scaled with the training scaler (already done above)
 test_weights_dummy = np.ones(len(test_mols))
-test_dps   = make_datapoints(test_mols, test_targets, test_weights_dummy, x_d_test_scaled)
-test_dset  = data.MoleculeDataset(test_dps, feat)
+test_dps    = make_datapoints(test_mols,
+                              np.zeros(len(test_mols)),   # dummy targets
+                              test_weights_dummy,
+                              x_d_test_scaled)
+test_dset   = data.MoleculeDataset(test_dps, feat)
 test_loader = data.build_dataloader(test_dset, num_workers=NUM_WORKERS, shuffle=False)
 
 raw_preds = final_trainer.predict(final_mpnn, test_loader)
 preds     = torch.cat(raw_preds).numpy().flatten()
 
-df_out = pd.DataFrame({
-    "Molecule Name":   test_names,
-    "SMILES":          test_smiles,
-    "pEC50_actual":    test_targets,
-    "pEC50_predicted": preds,
-    "residual":        test_targets - preds,
+df_submission = pd.DataFrame({
+    "Molecule Name": test_names,
+    "SMILES":        test_smiles,
+    "pEC50":         preds,
 })
-df_out.to_csv(OUTPUT_PREDS, index=False)
-print(f"Predictions saved to {OUTPUT_PREDS}")
-
-rmse = np.sqrt(np.mean((df_out["pEC50_actual"] - df_out["pEC50_predicted"]) ** 2))
-mae  = np.mean(np.abs(df_out["pEC50_actual"]  - df_out["pEC50_predicted"]))
-corr = df_out[["pEC50_actual", "pEC50_predicted"]].corr().iloc[0, 1]
-print(f"\nExternal test set  —  RMSE: {rmse:.3f}  MAE: {mae:.3f}  Pearson r: {corr:.3f}")
+df_submission.to_csv(SUBMISSION_PATH, index=False)
+print(f"Submission saved to {SUBMISSION_PATH}")
+print(f"\nFirst 5 predictions:")
+print(df_submission.head().to_string(index=False))
