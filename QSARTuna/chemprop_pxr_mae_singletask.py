@@ -175,7 +175,7 @@ def load_datapoints(smiles_list, targets_list=None):
     iterable = zip(smiles_list, targets_list) if targets_list is not None \
                else ((s, None) for s in smiles_list)
     for smi, y in iterable:
-        y_arr = np.array([[y]], dtype=float) if y is not None else np.array([[np.nan]])
+        y_arr = np.array([y], dtype=float) if y is not None else np.array([np.nan])
         dp = data.MoleculeDatapoint.from_smi(smi, y_arr)
         if dp.mol is None:
             skipped += 1
@@ -218,7 +218,7 @@ def run_fold(fold_train, fold_val, featurizer, max_epochs, patience):
     mpnn.eval()
     raw = trainer.predict(mpnn, val_loader)
     preds = torch.cat(raw).numpy().flatten()
-    actuals = np.array([dp.y[0] for dp in fold_val])
+    actuals = np.array([float(dp.y[0]) for dp in fold_val])
 
     mae  = float(np.mean(np.abs(actuals - preds)))
     rmse = float(np.sqrt(np.mean((actuals - preds) ** 2)))
