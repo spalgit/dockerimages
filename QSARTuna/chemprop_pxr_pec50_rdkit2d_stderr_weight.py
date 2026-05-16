@@ -422,6 +422,8 @@ best_params = {
     "ffn_hidden_dim": int(best_row["ffn_hidden_dim"]),
     "ffn_n_layers":   int(best_row["ffn_n_layers"]),
     "dropout":        float(best_row["dropout"]),
+    "mp_depth":       int(best_row["mp_depth"]),
+    "mp_hidden_dim":  int(best_row["mp_hidden_dim"]),
 }
 final_epochs = max(int(best_row["mean_best_epoch"] * 1.1), 5)
 print(f"\nBest hyperparameters : {best_params}")
