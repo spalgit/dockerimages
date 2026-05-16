@@ -52,9 +52,7 @@ TRAIN_PATH = Path(
     "processed_Openadmet_REAL_PXR_train_AND_test_main_with_side_info_"
     "AND_counter_screen_weighted.csv"
 )
-TEST_PATH = Path(
-    "~/dockerimages/QSARTuna/PXR/Prediction_OpenAdmet_ChemProp_Only_OpenADMET_Data.csv"
-)
+TEST_PATH = Path.home() / "dockerimages/QSARTuna/PXR/Prediction_OpenAdmet_ChemProp_Only_OpenADMET_Data.csv"
 MODEL_PKL_PATH  = Path.home() / "pxr_chemprop_rdkit2d_counter_weight_final.pkl"
 CV_RESULTS_PATH = Path.home() / "pxr_rdkit2d_counter_weight_cv_results.csv"
 OUTPUT_PREDS    = Path.home() / "pxr_rdkit2d_counter_weight_test_predictions.csv"
@@ -83,11 +81,12 @@ INIT_LR  = 1e-4
 MAX_LR   = 2e-4
 FINAL_LR = 1e-5
 
-# FFN-only grid; BondMessagePassing architecture is fixed at ChemProp defaults
 PARAM_GRID = {
     "ffn_hidden_dim": [300, 512],
     "ffn_n_layers":   [2, 3],
     "dropout":        [0.0, 0.2],
+    "mp_depth":       [3, 4],      # message passing steps
+    "mp_hidden_dim":  [300, 1024], # encoder hidden width
 }
 
 
@@ -171,27 +170,18 @@ def compute_weights(counter_values: np.ndarray) -> np.ndarray:
 
 # ── Build MPNN ─────────────────────────────────────────────────────────────────
 def build_mpnn(n_descriptors: int, ffn_hidden_dim: int, ffn_n_layers: int,
-               dropout: float, target_scaler) -> models.MPNN:
-    """
-    Build a standard ChemProp MPNN with RDKit2D descriptors concatenated
-    before the FFN.
-
-    x_d is pre-scaled outside the model (per-fold StandardScaler), so no
-    X_d_transform is stored here — the model receives already-scaled data.
-
-    Parameters
-    ----------
-    n_descriptors : number of kept RDKit descriptor columns
-    target_scaler : StandardScaler fitted on fold/full training targets;
-                    used to build the output UnscaleTransform
-    """
+               dropout: float, mp_depth: int, mp_hidden_dim: int,
+               target_scaler) -> models.MPNN:
     feat = featurizers.SimpleMoleculeMolGraphFeaturizer()
-    mp   = nn.BondMessagePassing(d_v=feat.atom_fdim, d_e=feat.bond_fdim)
+    mp   = nn.BondMessagePassing(
+               d_v=feat.atom_fdim, d_e=feat.bond_fdim,
+               depth=mp_depth, d_h=mp_hidden_dim,
+           )
     agg  = nn.MeanAggregation()
 
     output_transform = nn.UnscaleTransform.from_standard_scaler(target_scaler)
     ffn = nn.RegressionFFN(
-        input_dim=mp.output_dim + n_descriptors,   # 300 + n_descriptors
+        input_dim=mp.output_dim + n_descriptors,
         hidden_dim=ffn_hidden_dim,
         n_layers=ffn_n_layers,
         dropout=dropout,
@@ -200,7 +190,7 @@ def build_mpnn(n_descriptors: int, ffn_hidden_dim: int, ffn_n_layers: int,
     )
     return models.MPNN(
         mp, agg, ffn,
-        batch_norm=False,
+        batch_norm=True,
         metrics=[nn.metrics.RMSE(), nn.metrics.MAE()],
         init_lr=INIT_LR,
         max_lr=MAX_LR,
@@ -360,67 +350,71 @@ for b in range(strata.max() + 1):
           f"pEC50 {train_targets[mask].min():.2f}–{train_targets[mask].max():.2f}")
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Step 5 — 5-fold stratified CV grid search
+# Step 5 — 5-fold stratified CV grid search (skipped if results already exist)
 # ══════════════════════════════════════════════════════════════════════════════
-param_combos = [
-    dict(zip(PARAM_GRID.keys(), combo))
-    for combo in itertools.product(*PARAM_GRID.values())
-]
+if CV_RESULTS_PATH.exists():
+    print(f"\nCV results found at {CV_RESULTS_PATH} — skipping grid search.")
+    df_cv = pd.read_csv(CV_RESULTS_PATH).sort_values("mean_val_rmse").reset_index(drop=True)
+    print(f"\n{df_cv.to_string(index=False)}")
+else:
+    param_combos = [
+        dict(zip(PARAM_GRID.keys(), combo))
+        for combo in itertools.product(*PARAM_GRID.values())
+    ]
 
-print(f"\n{'='*60}")
-print(f"5-fold CV — {len(param_combos)} hyperparameter combos  |  "
-      f"n_descriptors={n_descriptors}")
-print(f"{'='*60}")
+    print(f"\n{'='*60}")
+    print(f"5-fold CV — {len(param_combos)} hyperparameter combos  |  "
+          f"n_descriptors={n_descriptors}")
+    print(f"{'='*60}")
 
-skf     = StratifiedKFold(n_splits=N_FOLDS, shuffle=True, random_state=42)
-indices = np.arange(len(train_mols))
+    skf     = StratifiedKFold(n_splits=N_FOLDS, shuffle=True, random_state=42)
+    indices = np.arange(len(train_mols))
 
-cv_results = []
+    cv_results = []
 
-for combo_idx, params in enumerate(param_combos):
-    print(f"\n[{combo_idx + 1}/{len(param_combos)}] {params}")
-    fold_rmses, fold_epochs = [], []
+    for combo_idx, params in enumerate(param_combos):
+        print(f"\n[{combo_idx + 1}/{len(param_combos)}] {params}")
+        fold_rmses, fold_epochs = [], []
 
-    for fold_num, (tr_idx, va_idx) in enumerate(skf.split(indices, strata)):
-        # Scale x_d per fold: fit on fold-train, apply to fold-val
-        xd_scaler = StandardScaler()
-        x_d_tr = xd_scaler.fit_transform(x_d_train_raw[tr_idx])
-        x_d_va = xd_scaler.transform(x_d_train_raw[va_idx])
+        for fold_num, (tr_idx, va_idx) in enumerate(skf.split(indices, strata)):
+            xd_scaler = StandardScaler()
+            x_d_tr = xd_scaler.fit_transform(x_d_train_raw[tr_idx])
+            x_d_va = xd_scaler.transform(x_d_train_raw[va_idx])
 
-        rmse, best_epoch = run_fold(
-            fold_num,
-            [train_mols[i] for i in tr_idx],
-            train_targets[tr_idx],
-            train_weights_clean[tr_idx],
-            x_d_tr,
-            [train_mols[i] for i in va_idx],
-            train_targets[va_idx],
-            train_weights_clean[va_idx],
-            x_d_va,
-            n_descriptors,
-            params,
-            max_epochs=CV_MAX_EPOCHS,
-            patience=CV_PATIENCE,
-        )
-        fold_rmses.append(rmse)
-        fold_epochs.append(best_epoch)
-        print(f"  Fold {fold_num + 1}: val_RMSE={rmse:.4f}  best_epoch={best_epoch}")
+            rmse, best_epoch = run_fold(
+                fold_num,
+                [train_mols[i] for i in tr_idx],
+                train_targets[tr_idx],
+                train_weights_clean[tr_idx],
+                x_d_tr,
+                [train_mols[i] for i in va_idx],
+                train_targets[va_idx],
+                train_weights_clean[va_idx],
+                x_d_va,
+                n_descriptors,
+                params,
+                max_epochs=CV_MAX_EPOCHS,
+                patience=CV_PATIENCE,
+            )
+            fold_rmses.append(rmse)
+            fold_epochs.append(best_epoch)
+            print(f"  Fold {fold_num + 1}: val_RMSE={rmse:.4f}  best_epoch={best_epoch}")
 
-    mean_rmse  = float(np.mean(fold_rmses))
-    std_rmse   = float(np.std(fold_rmses))
-    mean_epoch = int(np.mean(fold_epochs))
-    print(f"  → Mean val RMSE: {mean_rmse:.4f} ± {std_rmse:.4f}  "
-          f"Mean best epoch: {mean_epoch}")
+        mean_rmse  = float(np.mean(fold_rmses))
+        std_rmse   = float(np.std(fold_rmses))
+        mean_epoch = int(np.mean(fold_epochs))
+        print(f"  → Mean val RMSE: {mean_rmse:.4f} ± {std_rmse:.4f}  "
+              f"Mean best epoch: {mean_epoch}")
 
-    cv_results.append({**params,
-                       "mean_val_rmse":   mean_rmse,
-                       "std_val_rmse":    std_rmse,
-                       "mean_best_epoch": mean_epoch})
+        cv_results.append({**params,
+                           "mean_val_rmse":   mean_rmse,
+                           "std_val_rmse":    std_rmse,
+                           "mean_best_epoch": mean_epoch})
 
-df_cv = pd.DataFrame(cv_results).sort_values("mean_val_rmse").reset_index(drop=True)
-df_cv.to_csv(CV_RESULTS_PATH, index=False)
-print(f"\nCV results saved to {CV_RESULTS_PATH}")
-print(f"\n{df_cv.to_string(index=False)}")
+    df_cv = pd.DataFrame(cv_results).sort_values("mean_val_rmse").reset_index(drop=True)
+    df_cv.to_csv(CV_RESULTS_PATH, index=False)
+    print(f"\nCV results saved to {CV_RESULTS_PATH}")
+    print(f"\n{df_cv.to_string(index=False)}")
 
 # ── Select best hyperparameters ────────────────────────────────────────────────
 best_row    = df_cv.iloc[0]
@@ -428,6 +422,8 @@ best_params = {
     "ffn_hidden_dim": int(best_row["ffn_hidden_dim"]),
     "ffn_n_layers":   int(best_row["ffn_n_layers"]),
     "dropout":        float(best_row["dropout"]),
+    "mp_depth":       int(best_row["mp_depth"]),
+    "mp_hidden_dim":  int(best_row["mp_hidden_dim"]),
 }
 final_epochs = max(int(best_row["mean_best_epoch"] * 1.1), 5)
 print(f"\nBest hyperparameters : {best_params}")
