@@ -415,12 +415,17 @@ best_params = {
     "mp_depth":       int(best_row["mp_depth"]),
     "mp_hidden_dim":  int(best_row["mp_hidden_dim"]),
 }
-final_epochs = max(int(best_row["mean_best_epoch"] * 1.1), 5)
+cv_best_epoch = int(best_row["mean_best_epoch"])
+# Train the final model for the full CV budget — no validation set means no
+# early stopping, so we give the full epoch allowance rather than capping at
+# mean_best_epoch × 1.1 (which can underfit when 100 % of data is used).
+final_epochs = CV_MAX_EPOCHS
 print(f"\nBest hyperparameters : {best_params}")
-print(f"Final model epochs   : {final_epochs}  (mean best epoch × 1.1)")
+print(f"CV mean best epoch   : {cv_best_epoch}")
+print(f"Final model epochs   : {final_epochs}  (full CV_MAX_EPOCHS — all compounds, no early stop)")
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Step 6 — Final model: all training data, best hyperparameters
+# Step 6 — Final model: ALL training compounds, best hyperparameters, full budget
 # ══════════════════════════════════════════════════════════════════════════════
 print(f"\n{'='*60}")
 print(f"Training final model on all {len(train_mols)} compounds for {final_epochs} epochs")
