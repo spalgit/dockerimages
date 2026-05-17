@@ -58,10 +58,10 @@ NEUTRAL_WEIGHT = 1.0
 # These sit inside the scaffold CV param grid and are the ChemProp defaults.
 # Chosen to match the architecture family that produced the rank-~50 result.
 FFN_HIDDEN_DIM = 300
-FFN_N_LAYERS   = 2
-DROPOUT        = 0.0
-MP_DEPTH       = 3
-MP_HIDDEN_DIM  = 300
+FFN_N_LAYERS   = 3
+DROPOUT        = 0.2
+MP_DEPTH       = 4
+MP_HIDDEN_DIM  = 1024
 
 FINAL_EPOCHS = 150   # slow LR (max 2e-4) needs many steps; no early stopping
 NUM_WORKERS  = 0
