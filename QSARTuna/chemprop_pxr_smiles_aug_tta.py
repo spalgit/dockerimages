@@ -332,7 +332,7 @@ def report_metrics(actual: np.ndarray, predicted: np.ndarray, label: str = "") -
     return dict(mae=mae, rmse=rmse, rae=rae, r2=r2, spearman=rho, kendall=tau)
 
 
-# ── One CV fold (no augmentation — val set must stay clean) ───────────────────
+# ── One CV fold (no augmentation — keeps CV runtime same as baseline) ─────────
 def run_fold(
     fold_idx,
     train_mols, train_targets, train_weights, train_x_d,
@@ -341,13 +341,11 @@ def run_fold(
 ):
     feat = featurizers.SimpleMoleculeMolGraphFeaturizer()
 
-    # Augment only the training portion of this fold
-    aug_mols, aug_tgt, aug_wt, aug_xd = augment_training_data(
-        train_mols, train_targets, train_weights, train_x_d, N_TRAIN_AUG
-    )
-
-    train_dps = make_datapoints(aug_mols,  aug_tgt, aug_wt, aug_xd)
-    val_dps   = make_datapoints(val_mols,  val_targets, val_weights, val_x_d)
+    # No augmentation during CV: hyperparameter selection doesn't require it
+    # and augmenting here would make CV ~5× slower without changing which
+    # architecture wins.
+    train_dps = make_datapoints(train_mols, train_targets, train_weights, train_x_d)
+    val_dps   = make_datapoints(val_mols,   val_targets,   val_weights,   val_x_d)
 
     train_dset = data.MoleculeDataset(train_dps, feat)
     val_dset   = data.MoleculeDataset(val_dps,   feat)
