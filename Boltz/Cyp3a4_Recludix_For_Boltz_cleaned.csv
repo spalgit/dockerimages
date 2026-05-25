@@ -1,0 +1,16 @@
+smiles,ID
+P(=O)(OCCC)(N[C@@H](C)C(OCCC)=O)CCOc1ccc2cc[nH+]c(N[C@@H]3C(=O)N(c4cn(C(C)c5ncccc5)nc4)CC[C@@H]([NH+](C)C4CC(OC(F)(F)F)C4)CC3)c2c1,REX-013974
+S(=O)(=O)(N1C[C@@H](N2C(=O)[C@@H](NC(=O)c3sc4ccc([C@@H](P(=O)(OCCC)NC(C)(C)C(OCCC)=O)F)cc4c3)CC[C@H]([NH+](C)C3CC(OC(F)(F)F)C3)CC2)CCC1)c1ccccc1,REX-013907
+S(=O)(=O)(N1C[C@@H](N2C(=O)[C@@H](NC(=O)c3sc4ccc([C@@H](P(=O)(OCCC)NC(C)(C)C(OCCC)=O)F)cc4c3)CC[C@H]([NH+](C)C3CC(OC(F)(F)F)C3)CC2)CCC1)N1CCCC1,REX-013914
+P(=O)(Oc1ccccc1)(NC(C)(C)C(OCCC)=O)[C@H](F)c1ccc2sc(C(=O)N[C@@H]3C(=O)N([C@@H]4C(=O)N(c5n(-c6ccccc6)ccn5)CC4)CC[C@@H]([NH+](C)C4CC(OC(F)(F)F)C4)CC3)cc2c1,REX-013735
+P(=O)(OCCC)(NC(C)(C)C(OCCC)=O)[C@@H](F)c1ccc2sc(C(=O)N[C@@H]3C(=O)N(CC(=O)N(C)Cc4nnc(N5CC[NH+](CCC)CC5)cc4)CC[C@@H]([NH+](C)C4CC(OC(F)(F)F)C4)CC3)cc2c1,REX-013386
+P(=O)(OCCC)(NC(C)(C)C(OCCC)=O)[C@@H](F)c1ccc2sc(C(=O)N[C@@H]3C(=O)N(CC(=O)N(C)Cc4cnc(N5CC[NH+](CCC)CC5)cc4)CC[C@@H]([NH+](C)C4CC(OC(F)(F)F)C4)CC3)cc2c1,REX-013478
+P(=O)(Oc1ccccc1)(NC(C)(C)C(OCCC)=O)[C@H](F)c1ccc2sc(C(=O)N[C@@H]3C(=O)N(CC(=O)Nc4n(-c5ccccc5)ncc4)CC[C@@H]([NH+](C)C4CC(OC(F)(F)F)C4)CC3)cc2c1,REX-013004
+P(=O)(Oc1ccccc1)(NC(C)(C)C(OCCC)=O)[C@H](F)c1ccc2sc(C(=O)N[C@@H]3C(=O)N([C@H]4C(=O)N(c5n(-c6ccccc6)cnc5)CC4)CC[C@@H]([NH+](C)C4CC(OC(F)(F)F)C4)CC3)cc2c1,REX-013979
+P(=O)(Oc1ccccc1)(NC(C)(C)C(OCCC)=O)[C@H](F)c1ccc2sc(C(=O)N[C@@H]3C(=O)N([C@H](COC)C(=O)Nc4c(-c5ccccc5)noc4)CC[C@@H]([NH+](C)C4CC(OC(F)(F)F)C4)CC3)cc2c1,REX-013102
+P(=O)(Oc1ccccc1)(NC(C)(C)C(OCCC)=O)[C@H](F)c1ccc2sc(C(=O)N[C@@H]3C(=O)N([C@@H](COC)C(=O)Nc4c(-c5ccccc5)noc4)CC[C@@H]([NH+](C)C4CC(OC(F)(F)F)C4)CC3)cc2c1,REX-013122
+P(=O)(Oc1ccccc1)(NC(C)(C)C(OCCC)=O)[C@H](F)c1ccc2sc(C(=O)N[C@@H]3C(=O)N([C@@H]4C(=O)N(c5n(-c6ccccc6)cnc5)CC4)CC[C@@H]([NH+](C)C4CC(OC(F)(F)F)C4)CC3)cc2c1,REX-014011
+P(=O)(OCCC)(NC(C)(C)C(OCCC)=O)[C@H](F)c1ccc2sc(C(=O)N[C@@H]3C(=O)N([C@H]4CN(c5n(-c6ccccc6)ncc5)CCC4)CC[C@@H]([NH+](C)C4CC(OC(F)(F)F)C4)CC3)cc2c1,REX-013970
+P(=O)(Oc1ccccc1)(NC(C)(C)C(OCCC)=O)[C@H](F)c1ccc2sc(C(=O)N[C@@H]3C(=O)N([C@H]4C(=O)N(c5c(-c6ccccc6)noc5)CC4)CC[C@@H]([NH+](C)C4CC(OC(F)(F)F)C4)CC3)cc2c1,REX-013601
+P(=O)(Oc1ccccc1)(NC(C)(C)C(OCCC)=O)[C@H](F)c1ccc2sc(C(=O)N[C@@H]3C(=O)N(CC(=O)N4C5(C[C@H](c6cnccc6)C4)CC5)CC[C@@H]([NH+](C)C4CC(OC(F)(F)F)C4)CC3)cc2c1,REX-012987
+P(=O)(Oc1ccccc1)(NC(C)(C)C(OCCC)=O)[C@H](F)c1ccc2sc(C(=O)N[C@@H]3C(=O)N(CC(=O)Nc4c(-c5ccccc5)ncs4)CC[C@@H]([NH+](C)C4CC(OC(F)(F)F)C4)CC3)cc2c1,REX-012218
