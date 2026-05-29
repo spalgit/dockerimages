@@ -26,8 +26,8 @@ echo "=== [3/6] NVIDIA Container Toolkit ==="
 curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey \
     | sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
 
-distribution=$(. /etc/os-release; echo "$ID$VERSION_ID")
-curl -sL "https://nvidia.github.io/libnvidia-container/${distribution}/libnvidia-container.list" \
+# Use the generic stable/deb URL — distribution-specific URLs return 404 on Ubuntu 24.04
+curl -sL https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list \
     | sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' \
     | sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
 
