@@ -3,6 +3,10 @@ set -e
 
 echo "=== [1/6] System packages ==="
 sudo apt update
+# Headers must arrive first so any pending NVIDIA dpkg config can link .ko files
+sudo apt-get install -y linux-headers-azure
+# Fix any packages left in broken state from a previous partial run
+sudo apt-get -f install -y
 sudo apt-get install -y build-essential git docker.io
 
 sudo systemctl start docker
