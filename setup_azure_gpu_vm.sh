@@ -2,6 +2,8 @@
 set -e
 
 echo "=== [1/6] System packages ==="
+# Remove any broken sources left by a previous partial run
+sudo rm -f /etc/apt/sources.list.d/nvidia-container-toolkit.list
 sudo apt update
 # Headers must arrive first so any pending NVIDIA dpkg config can link .ko files
 sudo apt-get install -y linux-headers-azure
