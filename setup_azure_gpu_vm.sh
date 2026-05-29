@@ -14,6 +14,7 @@ NVIDIA_DRIVER_VERSION=$(sudo apt-cache search 'linux-modules-nvidia-[0-9]+-azure
     | awk '{print $1}' | sort | tail -n 1 | awk -F"-" '{print $4}')
 echo "Detected driver version: ${NVIDIA_DRIVER_VERSION}"
 sudo apt install -y \
+    linux-headers-azure \
     linux-modules-nvidia-${NVIDIA_DRIVER_VERSION}-azure \
     nvidia-driver-${NVIDIA_DRIVER_VERSION}
 
