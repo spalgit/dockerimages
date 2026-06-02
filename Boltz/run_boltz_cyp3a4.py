@@ -83,6 +83,7 @@ class Cyp3A4BoltzPredictor:
         cmd = [
             "boltz", "predict", str(yaml_file),
             "--use_msa_server",
+            "--use_potentials",
             "--cache", "~/.boltz",
             "--checkpoint", "/home/spal/.boltz/boltz2_conf.ckpt",
             "--accelerator", "gpu",

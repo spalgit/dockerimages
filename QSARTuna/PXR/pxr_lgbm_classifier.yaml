@@ -1,0 +1,93 @@
+# LightGBM binary classifier: active (pEC50 >= 4.5) vs inactive
+# Trained on 4140 training compounds + 253 exposed test compounds (4393 total)
+# Used as a post-processing gate on ChemProp regression predictions.
+#
+# Train:  conda activate openadmet-models
+#         cd /home/spal/dockerimages/QSARTuna/PXR
+#         openadmet train --config pxr_lgbm_classifier.yaml
+#
+# Output: P(active) for each compound.
+# Gating rule (applied in post_process_with_classifier.py):
+#   P(active) < 0.30  →  blend prediction toward inactive median (3.0)
+#   P(active) > 0.70  →  trust ChemProp regressor directly
+#   0.30–0.70         →  trust ChemProp regressor (uncertain zone)
+
+data:
+  anvil_dir: file:///home/spal/dockerimages/QSARTuna/PXR
+  type: intake
+  resource: /home/spal/dockerimages/QSARTuna/PXR/train_binary_classifier.csv
+  input_col: SMILES
+  target_cols:
+  - active         # 1 = pEC50 >= 4.5, 0 = pEC50 < 4.5
+  dropna: true
+
+metadata:
+  authors: Sandeep Pal
+  email: sandeepbii@yahoo.com
+  biotargets:
+  - PXR
+  build_number: 0
+  description: >
+    LightGBM binary classifier distinguishing PXR actives (pEC50>=4.5) from
+    inactives. Trained on all 4140 training compounds plus the 253 phase-1
+    exposed test compounds. Used as a gating layer on top of the ChemProp
+    regressor to correct systematic overprediction of inactives. The classifier
+    is intentionally separate from the regressor so each model focuses on what
+    it does best: LGBM on the activity/inactivity boundary, ChemProp on the
+    continuous pEC50 value for actives.
+  driver: sklearn
+  name: pxr_lgbm_classifier
+  tag: pxr-classifier
+  tags:
+  - openadmet
+  - pxr
+  - classifier
+  - inactive-gate
+  version: v1
+
+procedure:
+  feat:
+    # RDKit 2D descriptors + ECFP4 fingerprints — same featurization as the
+    # best-performing ensemble submissions from phase 1.
+    type: FeatureConcatenator
+    params:
+      featurizers:
+        DescriptorFeaturizer:
+          descr_type: desc2d
+        FingerprintFeaturizer:
+          fp_type: ecfp:4
+
+  model:
+    type: LGBMClassifierModel
+    params:
+      # Calibrated for class imbalance: 57% active, 43% inactive
+      class_weight: balanced
+      n_estimators: 500
+      learning_rate: 0.05
+      num_leaves: 63
+      max_depth: -1
+      min_child_samples: 20
+      subsample: 0.8
+      colsample_bytree: 0.8
+      reg_alpha: 0.1
+      reg_lambda: 0.1
+      random_state: 42
+
+  split:
+    type: ScaffoldSplitter
+    params:
+      random_state: 42
+      train_size: 0.85
+      val_size: 0.0
+      test_size: 0.15
+
+  train:
+    type: SKLearnBasicTrainer
+    params: {}
+
+report:
+  eval:
+  - type: ClassificationMetrics    # reports accuracy/ROC-AUC/F1 for the binary task
+    params: {}
+  - type: ClassificationPlots
+    params: {}

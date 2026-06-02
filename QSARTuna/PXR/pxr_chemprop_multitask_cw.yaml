@@ -1,0 +1,106 @@
+# ChemProp multi-task model: primary PXR pEC50 + counter-screen pEC50
+# Sample weights: inactives x2.5, active cliff compounds x0.5
+# Splitter: scaffold-based for honest out-of-distribution evaluation
+#
+# Train:  conda activate openadmet-models
+#         cd /home/spal/dockerimages/QSARTuna/PXR
+#         openadmet train --config pxr_chemprop_multitask_cw.yaml
+#
+# At inference use only the first output column (pEC50); discard pEC50_counter.
+
+data:
+  anvil_dir: file:///home/spal/dockerimages/QSARTuna/PXR
+  type: intake
+  resource: /home/spal/dockerimages/QSARTuna/PXR/train_multitask_weighted.csv
+  input_col: SMILES
+  # Two targets: primary assay + counter screen
+  # ChemProp masks NaN values so compounds missing pEC50_counter still
+  # contribute to the primary-task loss.
+  target_cols:
+  - pEC50
+  - pEC50_counter
+  weight_col: weight   # per-sample loss weight (inactives upweighted, cliff compounds downweighted)
+  dropna: false        # keep rows where pEC50_counter is NaN
+
+metadata:
+  authors: Sandeep Pal
+  email: sandeepbii@yahoo.com
+  biotargets:
+  - PXR
+  build_number: 0
+  description: >
+    Multi-task ChemProp regressor trained on PXR primary assay (pEC50) and
+    counter screen (pEC50_counter). Sample weights upweight inactives (pEC50<3.5)
+    by 2.5x and downweight activity-cliff compounds by 0.5x to correct the
+    systematic overprediction of inactives observed in phase 1.
+  driver: pytorch
+  name: pxr_chemprop_multitask_cw
+  tag: pxr-multitask-cw
+  tags:
+  - openadmet
+  - pxr
+  - multitask
+  - cliff-weighted
+  version: v1
+
+procedure:
+  feat:
+    type: ChemPropFeaturizer
+    params: {}
+
+  model:
+    type: ChemPropModel
+    params:
+      n_tasks: 2               # must match number of target_cols
+      messages: bond
+      aggregation: norm
+      depth: 4
+      message_hidden_dim: 600
+      ffn_hidden_dim: 600
+      ffn_num_layers: 3
+      dropout: 0.15
+      batch_norm: true
+      normalized_targets: true
+      from_chemeleon: false
+      # Noam learning rate schedule (standard ChemProp default)
+      scheduler: noam
+      max_lr: 0.001
+      warmup_epochs: 2
+
+  split:
+    # ScaffoldSplitter: test set contains scaffolds not seen in training.
+    # Gives a realistic estimate of performance on novel chemotypes — the
+    # same challenge faced for the blinded 260 test compounds.
+    type: ScaffoldSplitter
+    params:
+      random_state: 42
+      train_size: 0.85
+      val_size: 0.05
+      test_size: 0.10
+
+  train:
+    type: LightningTrainer
+    params:
+      accelerator: gpu
+      early_stopping: true
+      early_stopping_patience: 15
+      early_stopping_mode: min
+      early_stopping_min_delta: 0.001
+      max_epochs: 120
+      monitor_metric: val_loss
+      use_wandb: false
+
+report:
+  eval:
+  - type: RegressionMetrics
+    params: {}
+  - type: PytorchLightningRepeatedKFoldCrossValidation
+    params:
+      axes_labels:
+      - True pEC50
+      - Predicted pEC50
+      n_repeats: 3
+      n_splits: 5
+      random_state: 42
+      pXC50: true
+      title: Multi-task ChemProp CW — scaffold 5-fold CV
