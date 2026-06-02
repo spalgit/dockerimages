@@ -1,0 +1,10 @@
+*.csv
+*.tsv
+*.gz
+*.tar.gz
+*.zip
+*.pkl
+*.h5
+__pycache__/
+*.pyc
+.DS_Store
