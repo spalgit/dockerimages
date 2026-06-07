@@ -61,7 +61,8 @@ metadata:
 procedure:
   feat:
     type: ChemPropFeaturizer
-    params: {}
+    params:
+      batch_size: 64
 
   model:
     type: ChemPropModel
@@ -70,8 +71,8 @@ procedure:
       messages: bond
       aggregation: norm
       depth: 4
-      message_hidden_dim: 600
-      ffn_hidden_dim: 600
+      message_hidden_dim: 300
+      ffn_hidden_dim: 300
       ffn_num_layers: 3
       dropout: 0.15
       batch_norm: true

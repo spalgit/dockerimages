@@ -1,0 +1,93 @@
+# LightGBM binary classifier: active (pEC50 >= 4.5) vs inactive
+# Trained on 4124 training compounds ONLY (no test data leakage).
+# Uses the error-adjusted training set (train_cliff_error_weighted_median.csv):
+#   - 16 high-error pair compounds removed
+#   - Activity-cliff series smoothed using experimental error rules
+#
+# Class distribution: active=1: 2361, active=0: 1763
+#
+# Train:
+#   conda activate openadmet-models
+#   cd ~/OpenAdmet
+#   openadmet train --config ~/dockerimages/QSARTuna/PXR/pxr_lgbm_classifier_trainonly.yaml
+#
+# After training, re-run post_process_with_classifier.py pointing
+# --classifier_dir to the new anvil output directory.
+
+data:
+  anvil_dir: file:///home/spal/dockerimages/QSARTuna/PXR
+  type: intake
+  resource: /home/spal/dockerimages/QSARTuna/PXR/train_binary_classifier_trainonly.csv
+  input_col: SMILES
+  target_cols:
+  - active         # 1 = pEC50 >= 4.5, 0 = pEC50 < 4.5
+  dropna: true
+
+metadata:
+  authors: Sandeep Pal
+  email: sandeepbii@yahoo.com
+  biotargets:
+  - PXR
+  build_number: 0
+  description: >
+    LightGBM binary classifier distinguishing PXR actives (pEC50>=4.5) from
+    inactives. Trained on 4124 training compounds only — no test data included,
+    giving a clean evaluation when applied to the 253 phase-1 test compounds.
+    Based on the error-adjusted training set (16 high-error pair compounds
+    removed; activity-cliff series smoothed using experimental error rules).
+    Used as a gating layer on top of the ChemProp or rdkit2d ensemble regressor
+    to correct systematic overprediction of inactives.
+  driver: sklearn
+  name: pxr_lgbm_classifier_trainonly
+  tag: pxr-classifier-trainonly
+  tags:
+  - openadmet
+  - pxr
+  - classifier
+  - inactive-gate
+  - no-leakage
+  version: v1
+
+procedure:
+  feat:
+    type: FeatureConcatenator
+    params:
+      featurizers:
+        DescriptorFeaturizer:
+          descr_type: desc2d
+        FingerprintFeaturizer:
+          fp_type: ecfp:4
+
+  model:
+    type: LGBMClassifierModel
+    params:
+      class_weight: balanced
+      n_estimators: 500
+      learning_rate: 0.05
+      num_leaves: 63
+      max_depth: -1
+      min_child_samples: 20
+      subsample: 0.8
+      colsample_bytree: 0.8
+      reg_alpha: 0.1
+      reg_lambda: 0.1
+      random_state: 42
+
+  split:
+    type: ScaffoldSplitter
+    params:
+      random_state: 42
+      train_size: 0.85
+      val_size: 0.0
+      test_size: 0.15
+
+  train:
+    type: SKLearnBasicTrainer
+    params: {}
+
+report:
+  eval:
+  - type: ClassificationMetrics
+    params: {}
+  - type: ClassificationPlots
+    params: {}
