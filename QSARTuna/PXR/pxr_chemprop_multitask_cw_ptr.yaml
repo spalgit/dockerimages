@@ -1,0 +1,99 @@
+# ChemProp multi-task model with PTR-transformed labels
+# Labels are per-compound PTR probabilities (0-1); reverse with norm.ppf after prediction.
+# PTR parameters: threshold=5.0, effective_std=max(std_error_i, 0.40)
+#
+# Train:  conda activate openadmet-models
+#         cd /home/spal/dockerimages/QSARTuna/PXR
+#         openadmet train --config pxr_chemprop_multitask_cw_ptr.yaml
+#
+# Predict on test: see evaluate_ptr_predictions.py
+
+data:
+  anvil_dir: file:///home/spal/dockerimages/QSARTuna/PXR
+  type: intake
+  resource: /home/spal/dockerimages/QSARTuna/PXR/train_ptr_percompound_std.csv
+  input_col: SMILES
+  target_cols:
+  - pEC50
+  - pEC50_counter
+  weight_col: weight
+  dropna: false
+
+metadata:
+  authors: Sandeep Pal
+  email: sandeepbii@yahoo.com
+  biotargets:
+  - PXR
+  build_number: 0
+  description: >
+    Multi-task ChemProp regressor trained on PTR-transformed PXR labels.
+    Per-compound PTR: norm.cdf(pEC50_i, threshold=5.0, std=max(std_error_i, 0.40)).
+    Reverse transform at inference: norm.ppf(pred, 5.0, max(std_error_test_i, 0.40)).
+  driver: pytorch
+  name: pxr_chemprop_multitask_cw_ptr
+  tag: pxr-multitask-cw-ptr
+  tags:
+  - openadmet
+  - pxr
+  - multitask
+  - cliff-weighted
+  - ptr
+  version: v1
+
+procedure:
+  feat:
+    type: ChemPropFeaturizer
+    params: {}
+
+  model:
+    type: ChemPropModel
+    params:
+      n_tasks: 2
+      messages: bond
+      aggregation: norm
+      depth: 4
+      message_hidden_dim: 600
+      ffn_hidden_dim: 600
+      ffn_num_layers: 3
+      dropout: 0.15
+      batch_norm: true
+      normalized_targets: true
+      from_chemeleon: false
+      scheduler: noam
+      max_lr: 0.001
+      warmup_epochs: 2
+
+  split:
+    type: ScaffoldSplitter
+    params:
+      random_state: 42
+      train_size: 0.85
+      val_size: 0.05
+      test_size: 0.10
+
+  train:
+    type: LightningTrainer
+    params:
+      accelerator: gpu
+      early_stopping: true
+      early_stopping_patience: 15
+      early_stopping_mode: min
+      early_stopping_min_delta: 0.001
+      max_epochs: 120
+      monitor_metric: val_loss
+      use_wandb: false
+
+report:
+  eval:
+  - type: RegressionMetrics
+    params: {}
+  - type: PytorchLightningRepeatedKFoldCrossValidation
+    params:
+      axes_labels:
+      - True PTR
+      - Predicted PTR
+      n_repeats: 3
+      n_splits: 5
+      random_state: 42
+      pXC50: false
+      title: Multi-task ChemProp PTR — scaffold 5-fold CV

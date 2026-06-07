@@ -147,10 +147,24 @@ def main():
 
     # ── Load ChemProp predictions ─────────────────────────────────────────────
     df_cp = pd.read_csv(args.chemprop_pred)
-    # The multitask model outputs two columns; rename to be safe
-    pred_cols = [c for c in df_cp.columns if "pEC50" in c and "counter" not in c and "actual" not in c.lower()]
+    # openadmet predict copies all input columns (including the true pEC50) into
+    # its output CSV alongside the OADMET_PRED_* columns. Always prefer the
+    # OADMET_PRED column so we don't accidentally rename the truth column.
+    pred_cols = [c for c in df_cp.columns
+                 if "PRED" in c and "pEC50" in c and "counter" not in c]
+    if not pred_cols:
+        # Fallback for hand-crafted CSVs that don't follow the OADMET_PRED naming
+        pred_cols = [c for c in df_cp.columns
+                     if "pEC50" in c and "counter" not in c
+                     and "actual" not in c.lower() and "std" not in c.lower()
+                     and c != "pEC50"]
     if pred_cols:
+        print(f"Prediction column: {pred_cols[0]}")
         df_cp = df_cp.rename({pred_cols[0]: "pEC50_chemprop"}, axis=1)
+        # Drop any residual pEC50 column openadmet copied from the input file;
+        # the truth will be added cleanly from --truth_csv.
+        if "pEC50" in df_cp.columns:
+            df_cp = df_cp.drop(columns=["pEC50"])
     elif "pEC50" in df_cp.columns:
         df_cp = df_cp.rename({"pEC50": "pEC50_chemprop"}, axis=1)
     print(f"Loaded ChemProp predictions: {len(df_cp)} compounds")

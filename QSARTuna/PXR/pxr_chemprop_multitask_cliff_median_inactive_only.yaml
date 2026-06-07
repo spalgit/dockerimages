@@ -1,0 +1,104 @@
+# ChemProp multi-task model — cliff smoothing for ALL-INACTIVE series only
+# Mixed series (any member pEC50 >= 3.5) left untouched; SAR signal preserved.
+# Direct pEC50 regression — no PTR transform.
+#
+# Generate data:
+#   python make_cliff_median_training_data_v2.py --inactive_only
+#
+# Train:
+#   conda activate openadmet-models
+#   cd /home/spal/dockerimages/QSARTuna/PXR
+#   openadmet train --config pxr_chemprop_multitask_cliff_median_inactive_only.yaml
+
+data:
+  anvil_dir: file:///home/spal/dockerimages/QSARTuna/PXR
+  type: intake
+  resource: /home/spal/dockerimages/QSARTuna/PXR/train_cliff_median_v2_inactive_only.csv
+  input_col: SMILES
+  target_cols:
+  - pEC50
+  - pEC50_counter
+  weight_col: weight
+  dropna: false
+
+metadata:
+  authors: Sandeep Pal
+  email: sandeepbii@yahoo.com
+  biotargets:
+  - PXR
+  build_number: 0
+  description: >
+    Multi-task ChemProp regressor — activity-cliff smoothing restricted to
+    all-inactive series (pEC50 < 3.5 for all members). 25 series / 99 compounds
+    smoothed to series median; 36 mixed series (85 compounds) untouched.
+    Preserves genuine SAR signal at the activity boundary while removing noise
+    among the inactive benzoic acid / aniline clusters. Inactives (pEC50 < 3.5)
+    upweighted 2.5x. Direct pEC50 regression (no PTR transform).
+  driver: pytorch
+  name: pxr_chemprop_multitask_cliff_median_inactive_only
+  tag: pxr-multitask-cliff-median-inactive-only
+  tags:
+  - openadmet
+  - pxr
+  - multitask
+  - cliff-median
+  - inactive-only
+  version: v1
+
+procedure:
+  feat:
+    type: ChemPropFeaturizer
+    params: {}
+
+  model:
+    type: ChemPropModel
+    params:
+      n_tasks: 2
+      messages: bond
+      aggregation: norm
+      depth: 4
+      message_hidden_dim: 600
+      ffn_hidden_dim: 600
+      ffn_num_layers: 3
+      dropout: 0.15
+      batch_norm: true
+      normalized_targets: true
+      from_chemeleon: false
+      scheduler: noam
+      max_lr: 0.001
+      warmup_epochs: 2
+
+  split:
+    type: ScaffoldSplitter
+    params:
+      random_state: 42
+      train_size: 0.85
+      val_size: 0.05
+      test_size: 0.10
+
+  train:
+    type: LightningTrainer
+    params:
+      accelerator: gpu
+      early_stopping: true
+      early_stopping_patience: 15
+      early_stopping_mode: min
+      early_stopping_min_delta: 0.001
+      max_epochs: 120
+      monitor_metric: val_loss
+      use_wandb: false
+
+report:
+  eval:
+  - type: RegressionMetrics
+    params: {}
+  - type: PytorchLightningRepeatedKFoldCrossValidation
+    params:
+      axes_labels:
+      - True pEC50
+      - Predicted pEC50
+      n_repeats: 3
+      n_splits: 5
+      random_state: 42
+      pXC50: true
+      title: Multi-task ChemProp cliff-median (inactive-only) — scaffold 5-fold CV

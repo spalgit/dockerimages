@@ -1,0 +1,106 @@
+# ChemProp multi-task model with PTR v3 labels
+# threshold=5.0, std=0.55
+#
+# vs v1 (std=0.40): active zone PTR spread 72% wider; pEC50 1.7-7.0 fully recoverable
+# vs v2 (std=1.00): threshold back at 5.0 so active zone not pushed into flat tail
+#
+# Reverse transform at inference:
+#   pEC50_pred = norm.ppf(ptr_pred, loc=5.0, scale=0.55)
+#
+# Run:
+#   conda activate openadmet-models
+#   cd /home/spal/dockerimages/QSARTuna/PXR
+#   python make_ptr_training_data_v3.py
+#   openadmet train --config pxr_chemprop_multitask_cw_ptr_v3.yaml
+
+data:
+  anvil_dir: file:///home/spal/dockerimages/QSARTuna/PXR
+  type: intake
+  resource: /home/spal/dockerimages/QSARTuna/PXR/train_cliff_median_ptr_v3.csv 
+  input_col: SMILES
+  target_cols:
+  - pEC50
+  - pEC50_counter
+  weight_col: weight
+  dropna: false
+
+metadata:
+  authors: Sandeep Pal
+  email: sandeepbii@yahoo.com
+  biotargets:
+  - PXR
+  build_number: 0
+  description: >
+    Multi-task ChemProp regressor trained on PTR v3 labels.
+    threshold=5.0, std=0.55. Active zone (5.5-7.0) PTR spread 72% wider
+    than v1 (std=0.40), improving resolution for potent actives.
+    Full pEC50 range [1.7-7.0] recoverable with near-zero round-trip error.
+    Reverse transform: norm.ppf(pred, 5.0, 0.55).
+  driver: pytorch
+  name: pxr_chemprop_multitask_cw_ptr_v3
+  tag: pxr-multitask-cw-ptr-v3
+  tags:
+  - openadmet
+  - pxr
+  - multitask
+  - cliff-weighted
+  - ptr-v3
+  version: v1
+
+procedure:
+  feat:
+    type: ChemPropFeaturizer
+    params: {}
+
+  model:
+    type: ChemPropModel
+    params:
+      n_tasks: 2
+      messages: bond
+      aggregation: norm
+      depth: 4
+      message_hidden_dim: 600
+      ffn_hidden_dim: 600
+      ffn_num_layers: 3
+      dropout: 0.15
+      batch_norm: true
+      normalized_targets: true
+      from_chemeleon: false
+      scheduler: noam
+      max_lr: 0.001
+      warmup_epochs: 2
+
+  split:
+    type: ScaffoldSplitter
+    params:
+      random_state: 42
+      train_size: 0.85
+      val_size: 0.05
+      test_size: 0.10
+
+  train:
+    type: LightningTrainer
+    params:
+      accelerator: gpu
+      early_stopping: true
+      early_stopping_patience: 15
+      early_stopping_mode: min
+      early_stopping_min_delta: 0.001
+      max_epochs: 120
+      monitor_metric: val_loss
+      use_wandb: false
+
+report:
+  eval:
+  - type: RegressionMetrics
+    params: {}
+  - type: PytorchLightningRepeatedKFoldCrossValidation
+    params:
+      axes_labels:
+      - True PTR v3
+      - Predicted PTR v3
+      n_repeats: 3
+      n_splits: 5
+      random_state: 42
+      pXC50: false
+      title: Multi-task ChemProp PTR v3 — scaffold 5-fold CV

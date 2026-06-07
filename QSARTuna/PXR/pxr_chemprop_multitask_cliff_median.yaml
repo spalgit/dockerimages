@@ -1,0 +1,97 @@
+# ChemProp multi-task model trained on activity-cliff-smoothed data
+# Activity cliff compounds replaced with series median pEC50 (no PTR transform)
+#
+# Train:
+#   conda activate openadmet-models
+#   cd /home/spal/dockerimages/QSARTuna/PXR
+#   openadmet train --config pxr_chemprop_multitask_cliff_median.yaml
+
+data:
+  anvil_dir: file:///home/spal/dockerimages/QSARTuna/PXR
+  type: intake
+  resource: /home/spal/dockerimages/QSARTuna/PXR/train_cliff_median.csv
+  input_col: SMILES
+  target_cols:
+  - pEC50
+  - pEC50_counter
+  weight_col: weight
+  dropna: false
+
+metadata:
+  authors: Sandeep Pal
+  email: sandeepbii@yahoo.com
+  biotargets:
+  - PXR
+  build_number: 0
+  description: >
+    Multi-task ChemProp regressor trained on activity-cliff-smoothed PXR data.
+    184 compounds in 61 connected series (similarity >= 0.97, |delta pEC50| > 0.5)
+    have their pEC50 replaced by the series median. Weights recomputed on smoothed
+    values: inactives (pEC50 < 3.5) upweighted 2.5x.
+  driver: pytorch
+  name: pxr_chemprop_multitask_cliff_median
+  tag: pxr-multitask-cliff-median
+  tags:
+  - openadmet
+  - pxr
+  - multitask
+  - cliff-median
+  version: v1
+
+procedure:
+  feat:
+    type: ChemPropFeaturizer
+    params: {}
+
+  model:
+    type: ChemPropModel
+    params:
+      n_tasks: 2
+      messages: bond
+      aggregation: norm
+      depth: 4
+      message_hidden_dim: 600
+      ffn_hidden_dim: 600
+      ffn_num_layers: 3
+      dropout: 0.15
+      batch_norm: true
+      normalized_targets: true
+      from_chemeleon: false
+      scheduler: noam
+      max_lr: 0.001
+      warmup_epochs: 2
+
+  split:
+    type: ScaffoldSplitter
+    params:
+      random_state: 42
+      train_size: 0.85
+      val_size: 0.05
+      test_size: 0.10
+
+  train:
+    type: LightningTrainer
+    params:
+      accelerator: gpu
+      early_stopping: true
+      early_stopping_patience: 15
+      early_stopping_mode: min
+      early_stopping_min_delta: 0.001
+      max_epochs: 120
+      monitor_metric: val_loss
+      use_wandb: false
+
+report:
+  eval:
+  - type: RegressionMetrics
+    params: {}
+  - type: PytorchLightningRepeatedKFoldCrossValidation
+    params:
+      axes_labels:
+      - True pEC50
+      - Predicted pEC50
+      n_repeats: 3
+      n_splits: 5
+      random_state: 42
+      pXC50: true
+      title: Multi-task ChemProp cliff-median — scaffold 5-fold CV
