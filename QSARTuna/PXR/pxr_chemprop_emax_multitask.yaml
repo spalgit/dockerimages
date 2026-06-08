@@ -1,0 +1,109 @@
+# ChemProp multi-task: primary PXR pEC50 + Emax_vs_ctrl (efficacy)
+#
+# Rationale: 894 training compounds are weak full agonists (pEC50<3.5, Emax>0.85).
+# Structurally they resemble potent full agonists, causing systematic overprediction.
+# Joint prediction of Emax forces the shared encoder to learn that high Emax
+# does NOT imply high potency — breaking the structural degeneracy.
+# Weak full agonists are upweighted 3x; other inactives 2x.
+#
+# Train:
+#   conda activate openadmet-models
+#   cd /home/spal/dockerimages/QSARTuna/PXR
+#   openadmet anvil --recipe-path pxr_chemprop_emax_multitask.yaml \
+#                   --output-dir /home/spal/OpenAdmet_After_Phase1/OpenAdmet_Emax_multitask \
+#                   --tag pxr-emax-multitask
+#
+# At inference: first output column = pEC50; second = Emax_vs_ctrl.
+# Post-process: if Emax_pred > 0.85 and pEC50_pred < 3.5 -> weak full agonist flag.
+
+data:
+  anvil_dir: file:///home/spal/dockerimages/QSARTuna/PXR
+  type: intake
+  resource: /home/spal/dockerimages/QSARTuna/PXR/train_emax_multitask.csv
+  input_col: SMILES
+  target_cols:
+  - pEC50
+  - Emax_vs_ctrl
+  weight_col: weight
+  dropna: false
+
+metadata:
+  authors: Sandeep Pal
+  email: sandeepbii@yahoo.com
+  biotargets:
+  - PXR
+  build_number: 0
+  description: >
+    Multi-task ChemProp regressor jointly predicting PXR pEC50 and Emax_vs_ctrl.
+    Emax (efficacy relative to positive control) is used as an auxiliary task
+    to teach the model that structural similarity to potent full agonists does
+    not guarantee high potency. 894 weak full agonists (pEC50<3.5, Emax>0.85)
+    upweighted 3x; other low-pEC50 compounds upweighted 2x.
+    Emax_vs_ctrl capped at 99th percentile (2.94) before training.
+  driver: pytorch
+  name: pxr_chemprop_emax_multitask
+  tag: pxr-emax-multitask
+  tags:
+  - openadmet
+  - pxr
+  - multitask
+  - emax-auxiliary
+  version: v1
+
+procedure:
+  feat:
+    type: ChemPropFeaturizer
+    params: {}
+
+  model:
+    type: ChemPropModel
+    params:
+      n_tasks: 2
+      messages: bond
+      aggregation: norm
+      depth: 4
+      message_hidden_dim: 600
+      ffn_hidden_dim: 600
+      ffn_num_layers: 3
+      dropout: 0.15
+      batch_norm: true
+      normalized_targets: true
+      from_chemeleon: false
+      scheduler: noam
+      max_lr: 0.001
+      warmup_epochs: 2
+
+  split:
+    type: ScaffoldSplitter
+    params:
+      random_state: 42
+      train_size: 0.85
+      val_size: 0.05
+      test_size: 0.10
+
+  train:
+    type: LightningTrainer
+    params:
+      accelerator: gpu
+      early_stopping: true
+      early_stopping_patience: 15
+      early_stopping_mode: min
+      early_stopping_min_delta: 0.001
+      max_epochs: 120
+      monitor_metric: val_loss
+      use_wandb: false
+
+report:
+  eval:
+  - type: RegressionMetrics
+    params: {}
+  - type: PytorchLightningRepeatedKFoldCrossValidation
+    params:
+      axes_labels:
+      - True pEC50
+      - Predicted pEC50
+      n_repeats: 3
+      n_splits: 5
+      random_state: 42
+      pXC50: true
+      title: Emax multi-task ChemProp — scaffold 5-fold CV

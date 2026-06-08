@@ -1,0 +1,112 @@
+# Three-threshold PTR ChemProp model
+#
+# Tasks: PTR at T=3.0/σ=0.70, T=5.0/σ=0.55, T=6.5/σ=0.50
+#
+# Rationale: single PTR at T=5.0 gives PTR≈0 for all pEC50<3.5 compounds
+# (894 weak full agonists), so the model sees no gradient to distinguish
+# pEC50=1.7 from pEC50=3.4. Adding T=3.0 gives PTR values of 0.03–0.76
+# across the inactive range, forcing the model to discriminate.
+#
+# Train:
+#   conda activate openadmet-models
+#   cd /home/spal/dockerimages/QSARTuna/PXR
+#   openadmet anvil --recipe-path pxr_chemprop_ptr3.yaml \
+#                   --output-dir /home/spal/OpenAdmet_After_Phase1/OpenAdmet_PTR3 \
+#                   --tag pxr-ptr3
+#
+# Reconstruct pEC50 at inference — see evaluate_ptr3_predictions.py:
+#   weight_k = ptr_k * (1 - ptr_k)
+#   pEC50 = Σ(weight_k * norm.ppf(ptr_k, T_k, σ_k)) / Σ(weight_k)
+
+data:
+  anvil_dir: file:///home/spal/dockerimages/QSARTuna/PXR
+  type: intake
+  resource: /home/spal/dockerimages/QSARTuna/PXR/train_ptr3.csv
+  input_col: SMILES
+  target_cols:
+  - pEC50_ptr1    # T=3.0, σ=0.70  — inactive/weak region
+  - pEC50_ptr2    # T=5.0, σ=0.55  — moderate/active region
+  - pEC50_ptr3    # T=6.5, σ=0.50  — potent/highly potent region
+  weight_col: weight
+  dropna: false
+
+metadata:
+  authors: Sandeep Pal
+  email: sandeepbii@yahoo.com
+  biotargets:
+  - PXR
+  build_number: 0
+  description: >
+    Three-threshold PTR ChemProp model for PXR pEC50. PTR transforms applied
+    at thresholds 3.0 (σ=0.70), 5.0 (σ=0.55), and 6.5 (σ=0.50). The low
+    threshold (3.0) provides gradient signal for 894 weak full agonists
+    (pEC50 < 3.5) that are invisible to a single T=5.0 PTR. Inactives
+    (pEC50 < 3.5) upweighted 2.5x. Reconstruction: weighted-average of
+    norm.ppf(ptr_k, T_k, σ_k) with weight_k = ptr_k*(1-ptr_k).
+  driver: pytorch
+  name: pxr_chemprop_ptr3
+  tag: pxr-ptr3
+  tags:
+  - openadmet
+  - pxr
+  - ptr
+  - three-threshold
+  version: v1
+
+procedure:
+  feat:
+    type: ChemPropFeaturizer
+    params: {}
+
+  model:
+    type: ChemPropModel
+    params:
+      n_tasks: 3
+      messages: bond
+      aggregation: norm
+      depth: 4
+      message_hidden_dim: 600
+      ffn_hidden_dim: 600
+      ffn_num_layers: 3
+      dropout: 0.15
+      batch_norm: true
+      normalized_targets: true
+      from_chemeleon: false
+      scheduler: noam
+      max_lr: 0.001
+      warmup_epochs: 2
+
+  split:
+    type: ScaffoldSplitter
+    params:
+      random_state: 42
+      train_size: 0.85
+      val_size: 0.05
+      test_size: 0.10
+
+  train:
+    type: LightningTrainer
+    params:
+      accelerator: gpu
+      early_stopping: true
+      early_stopping_patience: 15
+      early_stopping_mode: min
+      early_stopping_min_delta: 0.001
+      max_epochs: 120
+      monitor_metric: val_loss
+      use_wandb: false
+
+report:
+  eval:
+  - type: RegressionMetrics
+    params: {}
+  - type: PytorchLightningRepeatedKFoldCrossValidation
+    params:
+      axes_labels:
+      - True PTR
+      - Predicted PTR
+      n_repeats: 3
+      n_splits: 5
+      random_state: 42
+      pXC50: false
+      title: Three-threshold PTR ChemProp — scaffold 5-fold CV
