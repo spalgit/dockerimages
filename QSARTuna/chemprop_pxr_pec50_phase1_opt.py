@@ -2,8 +2,8 @@
 ChemProp PXR pEC50 — hyperparameters selected against the 253 phase-1 test compounds.
 
 Workflow:
-  1. Train each hyperparameter combo on all 4140 training compounds
-     (CI-filtered + 3x inactive augmentation, combined sample_weight × counter weighting).
+  1. Train each hyperparameter combo on all 4132 training compounds
+     (CI-filtered, no augmentation, combined sample_weight × counter weighting).
   2. Evaluate directly on the 253 phase-1 compounds using pEC50 ground truth from
      test_phase1.csv (not from the SDF, which contains different values).
   3. Select the best hyperparameters by MAE on the 253.
@@ -31,7 +31,7 @@ from sklearn.model_selection import StratifiedKFold
 from chemprop import data, featurizers, models, nn
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
-TRAIN_SDF       = Path("/home/spal/dockerimages/QSARTuna/PXR/train_ci_filtered_aug.sdf")
+TRAIN_SDF       = Path("/home/spal/dockerimages/QSARTuna/PXR/train_ci_filtered.sdf")
 TEST_SDF        = Path("/home/spal/dockerimages/QSARTuna/PXR/test_OpenADMET_Data_prepped.sdf")
 PHASE1_CSV      = Path("/home/spal/dockerimages/QSARTuna/PXR/test_phase1.csv")
 HP_RESULTS_PATH = Path.home() / "pxr_phase1_opt_hp_results.csv"
@@ -43,7 +43,6 @@ TAG_TARGET  = "pEC50"
 TAG_WEIGHT  = "sample_weight"
 TAG_COUNTER = "pEC50_counter"
 TAG_NAME    = "Name"
-TAG_AUG     = "is_augmented"
 
 # ── Weight normalisation ───────────────────────────────────────────────────────
 WEIGHT_MIN     = 0.5
@@ -123,35 +122,32 @@ def counter_weights(counter_values: np.ndarray) -> np.ndarray:
 # ── Training SDF loader ────────────────────────────────────────────────────────
 def load_sdf_train(sdf_path: Path):
     suppl = Chem.SDMolSupplier(str(sdf_path), removeHs=True)
-    mols, names, targets, raw_weights, counters, is_aug = [], [], [], [], [], []
+    mols, names, targets, raw_weights, counters = [], [], [], [], []
     skipped = 0
 
     for mol in suppl:
         if mol is None:
             skipped += 1
             continue
-        name      = mol.GetProp(TAG_NAME) if mol.HasProp(TAG_NAME) else mol.GetProp("_Name")
-        target    = float(mol.GetProp(TAG_TARGET))
-        raw_wt    = float(mol.GetProp(TAG_WEIGHT))  if mol.HasProp(TAG_WEIGHT)  else 1.0
-        counter   = float(mol.GetProp(TAG_COUNTER)) if mol.HasProp(TAG_COUNTER) else np.nan
-        augmented = int(mol.GetProp(TAG_AUG))       if mol.HasProp(TAG_AUG)     else 0
+        name    = mol.GetProp(TAG_NAME) if mol.HasProp(TAG_NAME) else mol.GetProp("_Name")
+        target  = float(mol.GetProp(TAG_TARGET))
+        raw_wt  = float(mol.GetProp(TAG_WEIGHT))  if mol.HasProp(TAG_WEIGHT)  else 1.0
+        counter = float(mol.GetProp(TAG_COUNTER)) if mol.HasProp(TAG_COUNTER) else np.nan
 
         mols.append(mol)
         names.append(name)
         targets.append(target)
         raw_weights.append(raw_wt)
         counters.append(counter)
-        is_aug.append(augmented)
 
     targets     = np.array(targets,     dtype=float)
     raw_weights = np.array(raw_weights, dtype=float)
     counters    = np.array(counters,    dtype=float)
-    is_aug      = np.array(is_aug,      dtype=int)
 
     if skipped:
         print(f"  {skipped} molecules skipped (unreadable)")
-    print(f"  Loaded {len(mols)} rows  ({(is_aug==0).sum()} unique, {is_aug.sum()} augmented)")
-    return mols, names, targets, raw_weights, counters, is_aug
+    print(f"  Loaded {len(mols)} compounds")
+    return mols, names, targets, raw_weights, counters
 
 
 # ── Test SDF + phase-1 CSV loader ─────────────────────────────────────────────
@@ -255,7 +251,7 @@ def report_metrics(actual: np.ndarray, predicted: np.ndarray, label: str = "") -
 # Step 1 — Load training data
 # ══════════════════════════════════════════════════════════════════════════════
 print(f"\nLoading training SDF:\n  {TRAIN_SDF}")
-train_mols, train_names, train_targets, raw_weights, counter_values, is_aug_flags = \
+train_mols, train_names, train_targets, raw_weights, counter_values = \
     load_sdf_train(TRAIN_SDF)
 
 w_precision   = normalize_weights(raw_weights)
@@ -322,7 +318,7 @@ else:
         print(f"\n[{combo_idx + 1}/{len(param_combos)}] {params}")
         set_seed(42)
 
-        # Build full training dataset (all rows including augmented)
+        # Build full training dataset
         train_dps  = make_datapoints(train_mols, train_targets, train_weights)
         train_dset = data.MoleculeDataset(train_dps, feat)
         target_scaler = train_dset.normalize_targets()

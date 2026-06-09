@@ -1,25 +1,16 @@
 """
-ChemProp PXR pEC50 — reads training data from SDF (MOE-prepped 3D structures).
+ChemProp PXR pEC50 — MOE-prepped SDF training data, combined weighting.
 
-Training data: train_ci_filtered_aug.sdf
-  - Active compounds (pEC50 > 3.5): original MOE-prepped 3D mol blocks
-  - Inactive compounds (pEC50 <= 3.5, CI upper <= 4.0): original + 3 randomized
-    SMILES copies (2D); 8 ambiguous inactives with CI upper > 4.0 removed
+Training data: train_ci_filtered.sdf  (4132 compounds)
+  - 8 ambiguous inactives removed (pEC50 <= 3.5, CI upper > 4.0)
+  - No SMILES augmentation (redundant with Chemprop's permutation-invariant MPNN)
 
-Weighting: two independent signals multiplied together.
-    1. sample_weight (1/std_error) — measurement precision of the primary assay.
-       Clipped at p99 then normalised to [0.5, 2.0].
-    2. Counter-screen (pEC50_counter) — inversely mapped to [0.5, 2.0] so
-       selective compounds (low counter potency) get higher weight and
-       promiscuous hits get lower weight. Defaults to neutral 1.0 when absent
-       (23% of inactives, 14–20% of actives lack counter data).
-    Final weight = norm(sample_weight) × norm(counter_weight).
-    Augmented copies inherit their original compound's weights.
-
-CV leakage prevention:
-    Fold split at compound (Name) level.
-    Augmented copies only appear in training folds.
-    Validation uses the original (is_augmented=0) entry per compound.
+Weighting: sample_weight × counter_screen (two independent signals multiplied).
+  1. sample_weight (1/std_error): precision of primary assay measurement.
+     Clipped at p99 then normalised to [0.5, 2.0].
+  2. pEC50_counter: inversely mapped to [0.5, 2.0] — selective compounds
+     (low counter potency) get higher weight; promiscuous hits lower weight.
+     Defaults to neutral 1.0 when counter data absent.
 
 Usage:
     conda activate chemprop
@@ -42,23 +33,22 @@ from sklearn.model_selection import StratifiedKFold
 from chemprop import data, featurizers, models, nn
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
-TRAIN_SDF = Path("/home/spal/dockerimages/QSARTuna/PXR/train_ci_filtered_aug.sdf")
-TEST_SDF  = Path("/home/spal/dockerimages/QSARTuna/PXR/test_OpenADMET_Data_prepped.sdf")
-CV_RESULTS_PATH = Path.home() / "pxr_chemprop_ci_filt_aug_wtd_cv_results.csv"
-ENSEMBLE_DIR    = Path.home() / "pxr_ensemble_models_ci_filt_aug_wtd"
-OUTPUT_PREDS    = Path.home() / "pxr_chemprop_ci_filt_aug_wtd_test_predictions.csv"
+TRAIN_SDF       = Path("/home/spal/dockerimages/QSARTuna/PXR/train_ci_filtered.sdf")
+TEST_SDF        = Path("/home/spal/dockerimages/QSARTuna/PXR/test_OpenADMET_Data_prepped.sdf")
+CV_RESULTS_PATH = Path.home() / "pxr_chemprop_ci_filt_wtd_cv_results.csv"
+ENSEMBLE_DIR    = Path.home() / "pxr_ensemble_models_ci_filt_wtd"
+OUTPUT_PREDS    = Path.home() / "pxr_chemprop_ci_filt_wtd_test_predictions.csv"
 
 # ── SD tag names ───────────────────────────────────────────────────────────────
 TAG_TARGET  = "pEC50"
-TAG_WEIGHT  = "sample_weight"    # 1/std_error, pre-computed in SDF
+TAG_WEIGHT  = "sample_weight"
 TAG_COUNTER = "pEC50_counter"
 TAG_NAME    = "Name"
-TAG_AUG     = "is_augmented"
 
-# ── Weight normalisation range (applied to each component separately) ──────────
+# ── Weight normalisation ───────────────────────────────────────────────────────
 WEIGHT_MIN     = 0.5
 WEIGHT_MAX     = 2.0
-NEUTRAL_WEIGHT = 1.0             # counter-screen default when data absent
+NEUTRAL_WEIGHT = 1.0
 
 # ── CV settings ────────────────────────────────────────────────────────────────
 N_FOLDS       = 5
@@ -119,12 +109,7 @@ def normalize_weights(raw_weights: np.ndarray) -> np.ndarray:
 
 
 def counter_weights(counter_values: np.ndarray) -> np.ndarray:
-    """
-    Inversely map pEC50_counter to [WEIGHT_MIN, WEIGHT_MAX]:
-      low counter potency  → WEIGHT_MAX  (selective compound, trust more)
-      high counter potency → WEIGHT_MIN  (promiscuous hit, down-weight)
-      NaN                  → NEUTRAL_WEIGHT
-    """
+    """Inversely map pEC50_counter to [WEIGHT_MIN, WEIGHT_MAX]; NaN → NEUTRAL."""
     weights     = np.full(len(counter_values), NEUTRAL_WEIGHT, dtype=float)
     has_counter = ~np.isnan(counter_values)
     if has_counter.sum() > 1:
@@ -137,64 +122,36 @@ def counter_weights(counter_values: np.ndarray) -> np.ndarray:
     return weights
 
 
-# ── SDF loader (training) ──────────────────────────────────────────────────────
 def load_sdf_train(sdf_path: Path):
-    """
-    Load training SDF. Returns parallel arrays for all rows plus compound-level
-    indices for CV stratification.
-
-    Augmented entries (is_augmented=1) are included in training folds only;
-    validation always uses the original (is_augmented=0) entry.
-    """
     suppl = Chem.SDMolSupplier(str(sdf_path), removeHs=True)
-    mols, names, targets, raw_weights, counters, is_aug = [], [], [], [], [], []
+    mols, names, targets, raw_weights, counters = [], [], [], [], []
     skipped = 0
 
     for mol in suppl:
         if mol is None:
             skipped += 1
             continue
-        name      = mol.GetProp(TAG_NAME) if mol.HasProp(TAG_NAME) else mol.GetProp("_Name")
-        target    = float(mol.GetProp(TAG_TARGET))
-        raw_wt    = float(mol.GetProp(TAG_WEIGHT))  if mol.HasProp(TAG_WEIGHT)  else 1.0
-        counter   = float(mol.GetProp(TAG_COUNTER)) if mol.HasProp(TAG_COUNTER) else np.nan
-        augmented = int(mol.GetProp(TAG_AUG))       if mol.HasProp(TAG_AUG)     else 0
+        name    = mol.GetProp(TAG_NAME) if mol.HasProp(TAG_NAME) else mol.GetProp("_Name")
+        target  = float(mol.GetProp(TAG_TARGET))
+        raw_wt  = float(mol.GetProp(TAG_WEIGHT))  if mol.HasProp(TAG_WEIGHT)  else 1.0
+        counter = float(mol.GetProp(TAG_COUNTER)) if mol.HasProp(TAG_COUNTER) else np.nan
 
         mols.append(mol)
         names.append(name)
         targets.append(target)
         raw_weights.append(raw_wt)
         counters.append(counter)
-        is_aug.append(augmented)
 
     targets     = np.array(targets,     dtype=float)
     raw_weights = np.array(raw_weights, dtype=float)
     counters    = np.array(counters,    dtype=float)
-    is_aug      = np.array(is_aug,      dtype=int)
 
-    # unique_positions: index of the original (non-augmented) entry per compound,
-    # used for CV stratification and validation.
-    seen, unique_positions = set(), []
-    for idx, (name, aug) in enumerate(zip(names, is_aug)):
-        if name not in seen and aug == 0:
-            seen.add(name)
-            unique_positions.append(idx)
-
-    # name → all positions (incl. augmented copies)
-    name_to_positions: dict[str, list[int]] = {}
-    for pos, name in enumerate(names):
-        name_to_positions.setdefault(name, []).append(pos)
-
-    n_aug_entries = int(is_aug.sum())
-    print(f"  Loaded {len(mols)} rows  "
-          f"({len(unique_positions)} unique compounds, {n_aug_entries} augmented rows)")
     if skipped:
         print(f"  {skipped} molecules skipped (unreadable)")
+    print(f"  Loaded {len(mols)} compounds")
+    return mols, names, targets, raw_weights, counters
 
-    return mols, names, targets, raw_weights, counters, is_aug, unique_positions, name_to_positions
 
-
-# ── SDF loader (test set) ──────────────────────────────────────────────────────
 def load_sdf_test(sdf_path: Path):
     suppl = Chem.SDMolSupplier(str(sdf_path), removeHs=True)
     mols, names, targets = [], [], []
@@ -217,7 +174,6 @@ def load_sdf_test(sdf_path: Path):
     return mols, names, np.array(targets, dtype=float)
 
 
-# ── MPNN builder ───────────────────────────────────────────────────────────────
 def build_mpnn(
     ffn_hidden_dim, ffn_n_layers, dropout, mp_depth, mp_hidden_dim, target_scaler
 ) -> models.MPNN:
@@ -227,22 +183,19 @@ def build_mpnn(
                depth=mp_depth, d_h=mp_hidden_dim,
            )
     agg  = nn.MeanAggregation()
-    output_transform = nn.UnscaleTransform.from_standard_scaler(target_scaler)
     ffn  = nn.RegressionFFN(
         input_dim=mp.output_dim,
         hidden_dim=ffn_hidden_dim,
         n_layers=ffn_n_layers,
         dropout=dropout,
         criterion=nn.metrics.MAE(),
-        output_transform=output_transform,
+        output_transform=nn.UnscaleTransform.from_standard_scaler(target_scaler),
     )
     return models.MPNN(
         mp, agg, ffn,
         batch_norm=True,
         metrics=[nn.metrics.RMSE(), nn.metrics.MAE()],
-        init_lr=INIT_LR,
-        max_lr=MAX_LR,
-        final_lr=FINAL_LR,
+        init_lr=INIT_LR, max_lr=MAX_LR, final_lr=FINAL_LR,
     )
 
 
@@ -310,29 +263,17 @@ def run_fold(
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Step 1 — Load training SDF
+# Step 1 — Load training data
 # ══════════════════════════════════════════════════════════════════════════════
 print(f"\nLoading training SDF:\n  {TRAIN_SDF}")
-(
-    train_mols, train_names, train_targets, raw_weights, counter_values,
-    is_aug_flags, unique_positions, name_to_positions,
-) = load_sdf_train(TRAIN_SDF)
+train_mols, train_names, train_targets, raw_weights, counter_values = \
+    load_sdf_train(TRAIN_SDF)
 
-# Combined weight: precision × selectivity
-w_precision  = normalize_weights(raw_weights)
-w_counter    = counter_weights(counter_values)
+w_precision   = normalize_weights(raw_weights)
+w_counter     = counter_weights(counter_values)
 train_weights = w_precision * w_counter
-n_unique      = len(unique_positions)
-
-# Unique-compound arrays (used for CV stratification)
-uniq_mols    = [train_mols[i]    for i in unique_positions]
-uniq_targets = train_targets[unique_positions]
-uniq_weights = train_weights[unique_positions]
 
 n_with_counter = (~np.isnan(counter_values)).sum()
-print(f"  Total rows            : {len(train_mols)}")
-print(f"  Unique compounds      : {n_unique}")
-print(f"  Augmented extra rows  : {is_aug_flags.sum()}")
 print(f"  Counter screen avail. : {n_with_counter}/{len(train_mols)} "
       f"({100 * n_with_counter / len(train_mols):.1f}%)")
 print(f"  pEC50 range           : "
@@ -354,17 +295,17 @@ print(f"  pEC50 range : {test_targets.min():.2f} – {test_targets.max():.2f}")
 # Step 3 — Stratification labels for CV
 # ══════════════════════════════════════════════════════════════════════════════
 strata = pd.qcut(
-    uniq_targets, q=N_STRATA_BINS, labels=False, duplicates="drop"
+    train_targets, q=N_STRATA_BINS, labels=False, duplicates="drop"
 ).astype(int)
 
-print(f"\nStratification ({N_STRATA_BINS} bins, unique compounds only):")
+print(f"\nStratification ({N_STRATA_BINS} bins):")
 for b in range(strata.max() + 1):
     mask = strata == b
     print(f"  Bin {b}: n={mask.sum():4d}  "
-          f"pEC50 {uniq_targets[mask].min():.2f}–{uniq_targets[mask].max():.2f}")
+          f"pEC50 {train_targets[mask].min():.2f}–{train_targets[mask].max():.2f}")
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Step 4 — 5-fold stratified CV grid search (compound-level, leakage-safe)
+# Step 4 — 5-fold stratified CV grid search
 # ══════════════════════════════════════════════════════════════════════════════
 if CV_RESULTS_PATH.exists():
     print(f"\nCV results found at {CV_RESULTS_PATH} — skipping grid search.")
@@ -377,43 +318,25 @@ else:
     ]
 
     print(f"\n{'='*70}")
-    print(f"5-fold CV — {len(param_combos)} hyperparameter combos")
-    print("Train folds include all augmented copies; val uses original entry only.")
+    print(f"5-fold stratified CV — {len(param_combos)} hyperparameter combos")
     print(f"{'='*70}")
 
-    skf          = StratifiedKFold(n_splits=N_FOLDS, shuffle=True, random_state=42)
-    uniq_indices = np.arange(n_unique)
-    cv_results   = []
+    skf        = StratifiedKFold(n_splits=N_FOLDS, shuffle=True, random_state=42)
+    indices    = np.arange(len(train_mols))
+    cv_results = []
 
     for combo_idx, params in enumerate(param_combos):
         print(f"\n[{combo_idx + 1}/{len(param_combos)}] {params}")
         fold_losses, fold_epochs = [], []
 
-        for fold_num, (tr_uniq_idx, va_uniq_idx) in enumerate(
-            skf.split(uniq_indices, strata)
-        ):
+        for fold_num, (tr_idx, va_idx) in enumerate(skf.split(indices, strata)):
             set_seed(42)
-
-            # Training: all rows (incl. augmented) for each training compound
-            tr_positions = [
-                pos
-                for i in tr_uniq_idx
-                for pos in name_to_positions[train_names[unique_positions[i]]]
-            ]
-            # Validation: original entry only for each validation compound
-            va_positions = [unique_positions[i] for i in va_uniq_idx]
 
             val_loss, best_epoch = run_fold(
                 fold_num,
-                [train_mols[p]    for p in tr_positions],
-                train_targets[tr_positions],
-                train_weights[tr_positions],
-                [train_mols[p]    for p in va_positions],
-                train_targets[va_positions],
-                train_weights[va_positions],
-                params,
-                max_epochs=CV_MAX_EPOCHS,
-                patience=CV_PATIENCE,
+                [train_mols[i]  for i in tr_idx], train_targets[tr_idx], train_weights[tr_idx],
+                [train_mols[i]  for i in va_idx], train_targets[va_idx], train_weights[va_idx],
+                params, max_epochs=CV_MAX_EPOCHS, patience=CV_PATIENCE,
             )
             fold_losses.append(val_loss)
             fold_epochs.append(best_epoch)
@@ -459,14 +382,13 @@ print(f"Ensemble size        : {len(ENSEMBLE_SEEDS)} seeds")
 # ══════════════════════════════════════════════════════════════════════════════
 # Step 5 — Build test dataloader
 # ══════════════════════════════════════════════════════════════════════════════
-feat             = featurizers.SimpleMoleculeMolGraphFeaturizer()
-test_weights_d   = np.ones(len(test_mols))
-test_dps         = make_datapoints(test_mols, test_targets, test_weights_d)
-test_dset        = data.MoleculeDataset(test_dps, feat)
-test_loader      = data.build_dataloader(test_dset, num_workers=NUM_WORKERS, shuffle=False)
+feat           = featurizers.SimpleMoleculeMolGraphFeaturizer()
+test_dps       = make_datapoints(test_mols, test_targets, np.ones(len(test_mols)))
+test_dset      = data.MoleculeDataset(test_dps, feat)
+test_loader    = data.build_dataloader(test_dset, num_workers=NUM_WORKERS, shuffle=False)
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Step 6 — Train ensemble on all augmented training data
+# Step 6 — Train ensemble, predict test set
 # ══════════════════════════════════════════════════════════════════════════════
 ENSEMBLE_DIR.mkdir(parents=True, exist_ok=True)
 all_test_preds    = []
@@ -479,10 +401,10 @@ for i, seed in enumerate(ENSEMBLE_SEEDS):
 
     set_seed(seed)
 
-    all_train_dps  = make_datapoints(train_mols, train_targets, train_weights)
-    all_train_dset = data.MoleculeDataset(all_train_dps, feat)
-    target_scaler  = all_train_dset.normalize_targets()
-    train_loader   = data.build_dataloader(all_train_dset, num_workers=NUM_WORKERS)
+    train_dps  = make_datapoints(train_mols, train_targets, train_weights)
+    train_dset = data.MoleculeDataset(train_dps, feat)
+    target_scaler = train_dset.normalize_targets()
+    train_loader  = data.build_dataloader(train_dset, num_workers=NUM_WORKERS)
 
     mpnn = build_mpnn(**best_params, target_scaler=target_scaler)
 
@@ -496,9 +418,7 @@ for i, seed in enumerate(ENSEMBLE_SEEDS):
     )
     trainer.fit(mpnn, train_loader)
 
-    model_path = ENSEMBLE_DIR / f"model_seed{seed}.pt"
-    torch.save(mpnn, model_path)
-    print(f"  Saved → {model_path}")
+    torch.save(mpnn, ENSEMBLE_DIR / f"model_seed{seed}.pt")
 
     mpnn.eval()
     raw_preds = trainer.predict(mpnn, test_loader)
@@ -510,7 +430,7 @@ for i, seed in enumerate(ENSEMBLE_SEEDS):
     per_model_metrics.append(m)
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Step 7 — Ensemble prediction
+# Step 7 — Ensemble and output
 # ══════════════════════════════════════════════════════════════════════════════
 print(f"\n{'='*70}")
 print("Ensemble results")
