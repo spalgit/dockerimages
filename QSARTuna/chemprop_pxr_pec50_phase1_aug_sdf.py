@@ -37,7 +37,7 @@ from sklearn.model_selection import StratifiedKFold
 from chemprop import data, featurizers, models, nn
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
-TRAIN_SDF     = Path("/home/spal/dockerimages/QSARTuna/PXR/train_ci_filtered.sdf")
+TRAIN_SDF     = Path("/home/spal/dockerimages/QSARTuna/PXR/train_ci_filtered_correct_Prot_state.sdf")
 PHASE1_CSV    = Path("/home/spal/dockerimages/QSARTuna/PXR/test_phase1.csv")
 TEST_SDF      = Path("/home/spal/dockerimages/QSARTuna/PXR/test_OpenADMET_Data_prepped.sdf")
 
