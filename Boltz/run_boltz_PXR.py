@@ -88,20 +88,35 @@ class PXRBoltzPredictor:
 
     def parse_smiles_csv(self, smiles_csv):
         """
-        Accept two input formats:
-          • Simple  : smiles,ID  (no header)
-          • OpenAdmet: structure,smiles,Molecule Name,OCNT_ID  (with header)
+        Accept three input formats:
+          • Simple    : smiles,ID  (no header)
+          • OpenAdmet : structure,smiles,Molecule Name,OCNT_ID  (with header)
+          • Cleaned   : structure,smiles.smiles  (with header)
         """
         raw = pd.read_csv(smiles_csv, nrows=0)
-        if "smiles" in [c.lower() for c in raw.columns]:
+        cols_lower = [c.lower().strip() for c in raw.columns]
+
+        # Find SMILES column: exact 'smiles' or any column whose name contains 'smiles'
+        smiles_col = next(
+            (orig for orig, low in zip(raw.columns, cols_lower) if "smiles" in low),
+            None,
+        )
+
+        if smiles_col is not None:
             df = pd.read_csv(smiles_csv)
-            # normalise column names to lower-case for lookup
-            df.columns = [c.lower().strip() for c in df.columns]
-            df["ID_clean"] = (
-                df.get("molecule name", df.get("ocnt_id", df.get("structure", df.index.astype(str))))
-                .astype(str).str.strip()
+            df.columns = [c.strip() for c in df.columns]
+            # ID column: prefer 'structure', then 'Molecule Name', then row index
+            id_col = next(
+                (c for c in df.columns
+                 if c.lower().strip() in ("structure", "molecule name", "id", "ocnt_id")),
+                None,
             )
-            df["smiles_clean"] = df["smiles"].astype(str).str.strip()
+            df["ID_clean"] = (
+                df[id_col].astype(str).str.strip() if id_col else df.index.astype(str)
+            )
+            df["smiles_clean"] = df[smiles_col].astype(str).str.strip()
+            print(f"  SMILES column : {smiles_col}")
+            print(f"  ID column     : {id_col or 'row index'}")
         else:
             # headerless smiles,ID format
             df = pd.read_csv(smiles_csv, header=None, names=["smiles", "ID"])
@@ -110,7 +125,7 @@ class PXRBoltzPredictor:
 
         df = df.dropna(subset=["smiles_clean"])
         df = df[df["smiles_clean"] != "nan"]
-        print(f"Loaded {len(df)} PXR ligands")
+        print(f"Loaded {len(df)} PXR ligands from {smiles_csv}")
         return df
 
     def create_yaml(self, smiles, compound_id, ligand_idx):
@@ -140,9 +155,9 @@ class PXRBoltzPredictor:
             ]
         }
 
-        # Sanitise compound_id for use as a filename
+        # Name the YAML after the compound ID — Boltz uses this as the CIF stem
         safe_id = str(compound_id).replace("/", "-").replace(" ", "_")[:60]
-        yaml_path = self.yaml_dir / f"pxr_{ligand_idx:04d}_{safe_id}.yaml"
+        yaml_path = self.yaml_dir / f"{safe_id}.yaml"
         with open(yaml_path, "w") as f:
             yaml.dump(yaml_data, f, default_flow_style=False, sort_keys=False)
         return yaml_path
@@ -154,6 +169,7 @@ class PXRBoltzPredictor:
             "--use_msa_server",
             "--cache", "~/.boltz",
             "--checkpoint", "/home/spal/.boltz/boltz2_conf.ckpt",
+            "--use_potentials",
             "--diffusion_samples", "5",
             "--accelerator", "gpu",
             "--out_dir", str(self.out_dir)
@@ -194,9 +210,8 @@ class PXRBoltzPredictor:
                 ]
 
                 mean_pic50 = np.mean(pred_values)
-                # derive compound ID from yaml stem: pxr_0001_<ID>
-                parts = json_file.stem.split("_")
-                compound_id = "_".join(parts[2:]) if len(parts) > 2 else json_file.stem
+                # derive compound ID from yaml stem (stem == compound ID)
+                compound_id = json_file.stem
 
                 results.append({
                     "compound_ID":      compound_id,
