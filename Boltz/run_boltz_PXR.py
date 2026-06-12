@@ -35,6 +35,7 @@ import subprocess
 import json
 import os
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 import numpy as np
 import argparse
@@ -227,7 +228,7 @@ class PXRBoltzPredictor:
 
         return pd.DataFrame(results)
 
-    def run(self, smiles_csv):
+    def run(self, smiles_csv, n_workers=4):
         """Full PXR Boltz-2 prediction pipeline."""
         print("PXR (NR1I2 / O75469) BOLTZ-2 BINDING-AFFINITY PREDICTIONS")
         print(f"Pocket residues : {[r[1] for r in PXR_POCKET]}")
@@ -243,14 +244,23 @@ class PXRBoltzPredictor:
             yaml_files.append((yf, row))
         print(f"\nGenerated {len(yaml_files)} YAML inputs → {self.yaml_dir}")
 
-        # Run predictions
-        print(f"\nRunning {len(yaml_files)} Boltz-2 predictions...")
+        # Run predictions in parallel
+        print(f"\nRunning {len(yaml_files)} Boltz-2 predictions ({n_workers} workers)...")
         successful = 0
-        for yaml_file, row in yaml_files:
-            print(f"\n[{row['ID_clean']}]  {yaml_file.name}")
-            if self.run_boltz_prediction(yaml_file):
-                successful += 1
+
+        def _predict(yaml_file, compound_id):
             time.sleep(1)  # MSA server rate-limit courtesy delay
+            print(f"\n[{compound_id}]  {yaml_file.name}")
+            return self.run_boltz_prediction(yaml_file)
+
+        with ThreadPoolExecutor(max_workers=n_workers) as pool:
+            futures = {
+                pool.submit(_predict, yf, row["ID_clean"]): row["ID_clean"]
+                for yf, row in yaml_files
+            }
+            for future in as_completed(futures):
+                if future.result():
+                    successful += 1
 
         # Collect and report
         results_df = self.parse_results()
@@ -292,7 +302,11 @@ if __name__ == "__main__":
         "--out_dir", default="pxr_boltz_results",
         help="Output directory (default: pxr_boltz_results)"
     )
+    parser.add_argument(
+        "--workers", type=int, default=4,
+        help="Number of parallel Boltz predictions (default: 4)"
+    )
     args = parser.parse_args()
 
     predictor = PXRBoltzPredictor(args.out_dir)
-    results = predictor.run(args.smiles_csv)
+    results = predictor.run(args.smiles_csv, n_workers=args.workers)
