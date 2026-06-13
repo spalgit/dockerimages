@@ -164,7 +164,22 @@ class PXRBoltzPredictor:
         return yaml_path
 
     def run_boltz_prediction(self, yaml_file):
-        """Run Boltz-2 structure + affinity prediction."""
+        """Run Boltz-2 structure + affinity prediction.
+
+        Each compound gets its own out_dir (compound_out_dir) so that Boltz's
+        internal pre_affinity_*.npz cache lookup never cross-contaminates
+        results from sibling parallel runs sharing the same parent directory.
+        """
+        compound_id = yaml_file.stem
+        compound_out_dir = self.out_dir / compound_id
+        compound_out_dir.mkdir(exist_ok=True)
+
+        # Skip if affinity JSON already present from a prior successful run
+        existing = list(compound_out_dir.rglob("affinity*.json"))
+        if existing:
+            print(f"  SKIP (already done: {existing[0].name})")
+            return True
+
         cmd = [
             "boltz", "predict", str(yaml_file),
             "--use_msa_server",
@@ -173,7 +188,7 @@ class PXRBoltzPredictor:
             "--use_potentials",
             "--diffusion_samples", "5",
             "--accelerator", "gpu",
-            "--out_dir", str(self.out_dir)
+            "--out_dir", str(compound_out_dir)
         ]
 
         try:
@@ -303,8 +318,8 @@ if __name__ == "__main__":
         help="Output directory (default: pxr_boltz_results)"
     )
     parser.add_argument(
-        "--workers", type=int, default=4,
-        help="Number of parallel Boltz predictions (default: 4)"
+        "--workers", type=int, default=1,
+        help="Number of parallel Boltz predictions (default: 1; >1 risks GPU OOM)"
     )
     args = parser.parse_args()
 
