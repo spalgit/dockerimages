@@ -168,7 +168,7 @@ class PXRBoltzPredictor:
         cmd = [
             "boltz", "predict", str(yaml_file),
             "--use_msa_server",
-            "--cache", "~/.boltz",
+            "--cache", str(Path.home() / ".boltz"),
             "--checkpoint", "/home/spal/.boltz/boltz2_conf.ckpt",
             "--use_potentials",
             "--diffusion_samples", "5",
