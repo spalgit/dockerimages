@@ -310,17 +310,14 @@ print(f"  pEC50 range              : "
       f"(mean {train_targets.mean():.2f})")
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Step 2 — Load test SDF (Phase 2, 260 compounds)
+# Step 2 — Load test SDF (Phase 2, 260 compounds — no pEC50 tags, pure prediction)
 # ══════════════════════════════════════════════════════════════════════════════
 print(f"\nLoading test SDF:\n  {TEST_SDF}")
-test_mols, test_names, test_smiles, test_tags = load_sdf(
+test_mols, test_names, test_smiles, _ = load_sdf(
     TEST_SDF,
-    required_tags=[TAG_TARGET],
+    required_tags=[],
 )
-test_targets = test_tags[TAG_TARGET]
-print(f"  Loaded {len(test_mols)} molecules")
-print(f"  pEC50 range : {test_targets.min():.2f} – {test_targets.max():.2f}  "
-      f"(mean {test_targets.mean():.2f})")
+print(f"  Loaded {len(test_mols)} molecules (no experimental pEC50 — prediction only)")
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Step 3 — RDKit 2D descriptors; column selection from training set only
@@ -454,8 +451,9 @@ x_d_test_scaled  = final_xd_scaler.transform(x_d_test_raw)
 
 feat = featurizers.SimpleMoleculeMolGraphFeaturizer()
 
+test_targets_dummy = np.zeros(len(test_mols))   # no actual labels; only SMILES are available
 test_weights_dummy = np.ones(len(test_mols))
-test_dps    = make_datapoints(test_mols, test_targets, test_weights_dummy, x_d_test_scaled)
+test_dps    = make_datapoints(test_mols, test_targets_dummy, test_weights_dummy, x_d_test_scaled)
 test_dset   = data.MoleculeDataset(test_dps, feat)
 test_loader = data.build_dataloader(test_dset, num_workers=NUM_WORKERS, shuffle=False)
 
@@ -463,8 +461,7 @@ test_loader = data.build_dataloader(test_dset, num_workers=NUM_WORKERS, shuffle=
 # Step 7 — Train N ensemble members on ALL training data
 # ══════════════════════════════════════════════════════════════════════════════
 ENSEMBLE_DIR.mkdir(parents=True, exist_ok=True)
-all_test_preds     = []
-per_model_metrics  = []
+all_test_preds = []
 
 for i, seed in enumerate(ENSEMBLE_SEEDS):
     print(f"\n{'='*70}")
@@ -500,10 +497,8 @@ for i, seed in enumerate(ENSEMBLE_SEEDS):
     raw_preds = trainer.predict(mpnn, test_loader)
     preds_i   = torch.cat(raw_preds).numpy().flatten()
     all_test_preds.append(preds_i)
-
-    m = report_metrics(test_targets, preds_i, label=f"seed={seed}")
-    m["seed"] = seed
-    per_model_metrics.append(m)
+    print(f"  Predictions: min={preds_i.min():.3f}  max={preds_i.max():.3f}  "
+          f"mean={preds_i.mean():.3f}  seed={seed}")
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Step 8 — Ensemble prediction (mean across all seeds)
@@ -512,32 +507,22 @@ print(f"\n{'='*70}")
 print("F1 Ensemble results (WITH Phase 1 experimental data in training)")
 print(f"{'='*70}")
 
-all_preds_array  = np.stack(all_test_preds, axis=0)
-ensemble_preds   = all_preds_array.mean(axis=0)
-ensemble_metrics = report_metrics(test_targets, ensemble_preds, label="ENSEMBLE")
+all_preds_array = np.stack(all_test_preds, axis=0)
+ensemble_preds  = all_preds_array.mean(axis=0)
+ensemble_std    = all_preds_array.std(axis=0)
 
 pred_cols = {f"pEC50_seed{s}": p for s, p in zip(ENSEMBLE_SEEDS, all_test_preds)}
 df_out = pd.DataFrame({
-    "Molecule Name":  test_names,
-    "SMILES":         test_smiles,
-    "pEC50_actual":   test_targets,
-    "pEC50_ensemble": ensemble_preds,
-    "residual":       test_targets - ensemble_preds,
+    "Molecule Name":   test_names,
+    "SMILES":          test_smiles,
+    "pEC50_ensemble":  ensemble_preds,
+    "pEC50_std":       ensemble_std,
     **pred_cols,
 })
 df_out.to_csv(OUTPUT_PREDS, index=False)
 print(f"\nPredictions saved to {OUTPUT_PREDS}")
-
-df_members = pd.DataFrame(per_model_metrics)
-print("\nPer-member test-set metrics:")
-print(df_members.to_string(index=False))
-print(f"\nMean individual MAE : {df_members['mae'].mean():.4f} ± {df_members['mae'].std():.4f}")
-print(f"Ensemble MAE        : {ensemble_metrics['mae']:.4f}")
-print(f"Gain vs mean indiv. : {df_members['mae'].mean() - ensemble_metrics['mae']:.4f}")
-
-m = ensemble_metrics
-print(
-    f"\n[Leaderboard format]  "
-    f"MAE={m['mae']:.4f}  RAE={m['rae']:.4f}  "
-    f"R²={m['r2']:.4f}  Spearman={m['spearman']:.4f}  Kendall={m['kendall']:.4f}"
-)
+print(f"\nEnsemble prediction summary (F1 — WITH Phase 1 data in training):")
+print(f"  n compounds  : {len(ensemble_preds)}")
+print(f"  pEC50 range  : {ensemble_preds.min():.3f} – {ensemble_preds.max():.3f}")
+print(f"  pEC50 mean   : {ensemble_preds.mean():.3f}")
+print(f"  Mean std dev : {ensemble_std.mean():.3f}  (ensemble uncertainty)")
