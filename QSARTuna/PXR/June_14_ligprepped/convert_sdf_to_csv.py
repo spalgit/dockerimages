@@ -23,7 +23,7 @@ OPTIONAL_TAGS = ["pEC50_counter"]
 
 
 def sdf_to_csv(sdf_path: Path, csv_path: Path) -> pd.DataFrame:
-    suppl = Chem.SDMolSupplier(str(sdf_path), removeHs=True)
+    suppl = Chem.SDMolSupplier(str(sdf_path), removeHs=False)
     rows, skipped = [], 0
     for mol in suppl:
         if mol is None:

@@ -92,19 +92,15 @@ procedure:
     type: SKLearnGridSearchTrainer
     params:
       param_grid:
-        # Tree complexity
-        n_estimators:     [300, 600, 1000]
-        num_leaves:       [31, 63, 127]
-        max_depth:        [-1, 6, 9]
-        # Learning dynamics
-        learning_rate:    [0.01, 0.05, 0.1]
-        min_child_samples:[10, 20, 50]
-        # Subsampling (row / column)
-        subsample:        [0.7, 0.9]
-        colsample_bytree: [0.7, 0.9]
-        # Regularisation
-        reg_alpha:        [0.0, 0.1, 1.0]
-        reg_lambda:       [0.0, 0.1, 1.0]
+        # 3×3×3×3×3 = 243 combos × 5-fold CV = 1215 fits (~10-20 min)
+        # The three highest-impact LGBM parameters: n_estimators/learning_rate
+        # are tuned together (coupled), num_leaves controls tree complexity,
+        # and the two regularisation terms clean up overfitting.
+        n_estimators:  [300, 600, 1000]
+        learning_rate: [0.01, 0.05, 0.1]
+        num_leaves:    [31, 63, 127]
+        reg_alpha:     [0.0, 0.1, 1.0]
+        reg_lambda:    [0.0, 0.1, 1.0]
 
 report:
   eval:
