@@ -1,0 +1,124 @@
+# LightGBM PXR pEC50 regression — hyperparameter optimisation via GridSearchCV
+# Training set F2: 4139 compounds (WITHOUT Phase 1 experimental results)
+# Test set:        test_phase2_ligprepped_f_2.sdf (260 Phase 2 compounds)
+#
+# Compare against lgbm_f1_with_phase1_hpo.yaml to quantify the impact of
+# adding Phase 1 experimental data to the training set.
+#
+# Prerequisites:
+#   conda activate openadmet
+#   python convert_sdf_to_csv.py   # generates f2_train_4139.csv
+#
+# Run:
+#   cd /home/spal/dockerimages/QSARTuna/PXR/June_14_ligprepped
+#   openadmet train --config lgbm_f2_without_phase1_hpo.yaml
+#
+# Hyperparameter search:
+#   SKLearnGridSearchTrainer wraps sklearn GridSearchCV (default 5-fold CV).
+#   Grid: 3×3×3×2×2×3×3 = 972 combos × 5 folds = 4 860 fits.
+#   LGBM on ~4 000 compounds fits in < 1 s each, so expect ~1–2 h total.
+
+data:
+  type: intake
+  resource: /home/spal/dockerimages/QSARTuna/PXR/June_14_ligprepped/f2_train_4139.csv
+  input_col: SMILES
+  target_cols:
+    - pEC50
+  dropna: true
+
+metadata:
+  authors: Sandeep Pal
+  email: sandeepbii@yahoo.com
+  biotargets:
+    - PXR
+  build_number: 0
+  description: >
+    LightGBM PXR pEC50 regressor trained on 4139 compounds (training set F2),
+    WITHOUT the experimental pEC50 values from Phase 1 test compounds.
+    RDKit 2D descriptors + ECFP4 fingerprints. Hyperparameters selected via
+    5-fold GridSearchCV. Compare with F1 (4392 compounds, with Phase 1 data) to
+    quantify the benefit of augmenting with Phase 1 experimental results.
+  driver: sklearn
+  name: pxr_lgbm_f2_without_phase1_hpo
+  tag: pxr-lgbm-f2-hpo
+  tags:
+    - openadmet
+    - pxr
+    - lgbm
+    - regression
+    - hpo
+    - without-phase1
+  version: v1
+
+procedure:
+  feat:
+    # RDKit 2D descriptors + ECFP4 — same featurisation used in the best
+    # ChemProp ensemble submissions from Phase 1.
+    type: FeatureConcatenator
+    params:
+      featurizers:
+        DescriptorFeaturizer:
+          descr_type: desc2d
+        FingerprintFeaturizer:
+          fp_type: ecfp:4
+
+  model:
+    type: LGBMRegressorModel
+    # These defaults are overridden by the best combo found in the grid search.
+    params:
+      n_estimators: 500
+      learning_rate: 0.05
+      num_leaves: 63
+      max_depth: -1
+      min_child_samples: 20
+      subsample: 0.8
+      colsample_bytree: 0.8
+      reg_alpha: 0.0
+      reg_lambda: 0.0
+      random_state: 42
+      verbose: -1
+
+  split:
+    # Scaffold split: test compounds are structurally distinct from training,
+    # giving a realistic estimate of generalisation to the Phase 2 test set.
+    type: ScaffoldSplitter
+    params:
+      random_state: 42
+      train_size: 0.85
+      val_size: 0.0
+      test_size: 0.15
+
+  train:
+    type: SKLearnGridSearchTrainer
+    params:
+      param_grid:
+        # Tree complexity
+        n_estimators:     [300, 600, 1000]
+        num_leaves:       [31, 63, 127]
+        max_depth:        [-1, 6, 9]
+        # Learning dynamics
+        learning_rate:    [0.01, 0.05, 0.1]
+        min_child_samples:[10, 20, 50]
+        # Subsampling (row / column)
+        subsample:        [0.7, 0.9]
+        colsample_bytree: [0.7, 0.9]
+        # Regularisation
+        reg_alpha:        [0.0, 0.1, 1.0]
+        reg_lambda:       [0.0, 0.1, 1.0]
+
+report:
+  eval:
+    - type: RegressionMetrics
+      params: {}
+    - type: SKLearnRepeatedKFoldCrossValidation
+      params:
+        axes_labels:
+          - True pEC50
+          - Predicted pEC50
+        min_val: 3
+        max_val: 10
+        pXC50: true
+        n_splits: 5
+        n_repeats: 3
+        title: >
+          F2 (without Phase 1 data, n=4139) — True vs Predicted pEC50 (scaffold CV)
