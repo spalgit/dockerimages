@@ -197,7 +197,7 @@ for seed in ENSEMBLE_SEEDS:
     if not model_path.exists():
         print(f"  WARNING: {model_path} not found — skipping seed {seed}")
         continue
-    mpnn = torch.load(model_path, map_location="cpu")
+    mpnn = torch.load(model_path, map_location="cpu", weights_only=False)
     mpnn.eval()
     raw = trainer.predict(mpnn, test_loader)
     preds_i = torch.cat(raw).numpy().flatten()
