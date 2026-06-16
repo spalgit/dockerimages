@@ -1,8 +1,8 @@
 """
 ChemProp PXR pEC50 — RDKit 2D descriptors + counter-assay weighting + multi-seed ensemble.
-Training set F1: train_set_AND_phase_one_results_4392_ligpreped_f_1.sdf
-  (includes experimental pEC50 values from Phase 1 test compounds)
-Test set: test_phase2_ligprepped_f_2.sdf (260 Phase 2 compounds)
+Training set F1: train_set_AND_phase_one_results_4392_ligpreped_f_1_n_1_2_3.sdf
+  (includes experimental pEC50 values from Phase 1 test compounds; fully ligand-prepped)
+Test set: test_phase2_ligprepped_f_2_n_1_2_3.sdf (260 Phase 2 compounds)
 
 Compare against chemprop_f2_without_phase1_results.py to quantify the impact
 of including Phase 1 experimental data in the training set.
@@ -32,8 +32,8 @@ from chemprop import data, featurizers, models, nn
 # ── Paths ──────────────────────────────────────────────────────────────────────
 HERE = Path("/home/spal/dockerimages/QSARTuna/PXR/June_14_ligprepped")
 
-TRAIN_SDF = HERE / "train_set_AND_phase_one_results_4392_ligpreped_f_1.sdf"
-TEST_SDF  = HERE / "test_phase2_ligprepped_f_2.sdf"
+TRAIN_SDF = HERE / "train_set_AND_phase_one_results_4392_ligpreped_f_1_n_1_2_3.sdf"
+TEST_SDF  = HERE / "test_phase2_ligprepped_f_2_n_1_2_3.sdf"
 
 CV_RESULTS_PATH  = HERE / "f1_cv_results.csv"
 ENSEMBLE_DIR     = HERE / "f1_ensemble_models"
@@ -283,7 +283,7 @@ def run_fold(
 # Step 1 — Load training SDF (4392 compounds, includes Phase 1 test results)
 # ══════════════════════════════════════════════════════════════════════════════
 print(f"\n{'='*70}")
-print("F1: Training set WITH Phase 1 experimental results (4392 compounds)")
+print("F1: Training set WITH Phase 1 experimental results (4392 compounds, ligand-prepped)")
 print(f"{'='*70}")
 print(f"\nLoading training SDF:\n  {TRAIN_SDF}")
 train_mols, train_names, train_smiles, train_tags = load_sdf(
