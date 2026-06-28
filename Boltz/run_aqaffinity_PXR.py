@@ -19,19 +19,10 @@ import numpy as np
 import pandas as pd
 from pathlib import Path
 
-# DeepSpeed requires CUDA_HOME to point to the toolkit (nvcc + headers).
-# Auto-detect common locations if not already set.
-if "CUDA_HOME" not in os.environ:
-    for _candidate in ["/usr/local/cuda", "/usr/local/cuda-12", "/usr/local/cuda-12.0",
-                       "/usr/local/cuda-12.1", "/usr/local/cuda-12.2", "/usr/local/cuda-12.4",
-                       "/usr/local/cuda-12.6", "/usr/local/cuda-12.8"]:
-        if Path(_candidate).exists():
-            os.environ["CUDA_HOME"] = _candidate
-            print(f"Auto-set CUDA_HOME={_candidate}")
-            break
-    else:
-        print("WARNING: CUDA_HOME not set and no /usr/local/cuda* found. "
-              "Set it manually: export CUDA_HOME=/usr/local/cuda")
+# DeepSpeed tries to compile CUDA ops if CUDA_HOME/nvcc is found.
+# For inference we don't need compiled ops — disable them unconditionally.
+os.environ["DS_BUILD_OPS"] = "0"
+os.environ["DS_SKIP_CUDA_CHECK"] = "1"
 
 # ── Full human PXR sequence ────────────────────────────────────────────────────
 # UniProt O75469 (NR1I2_HUMAN), canonical isoform 1, 434 aa
