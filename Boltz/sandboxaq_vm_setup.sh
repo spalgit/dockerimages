@@ -40,6 +40,14 @@ conda config --append envs_dirs "$BASE/conda/envs"
 
 # ---------------------------------------------------------------------------
 echo ""
+echo "=== Step 2b: Download and install aqaffinity (+ openfold3) ==="
+# git clone over HTTPS requires token auth; use 'hf download' instead
+AQAFFINITY_DIR=$BASE/aqaffinity
+hf download SandboxAQ/aqaffinity --local-dir "$AQAFFINITY_DIR"
+conda run --prefix "$ENV_PREFIX" pip install "$AQAFFINITY_DIR"
+
+# ---------------------------------------------------------------------------
+echo ""
 echo "=== Step 3: Download OpenFold3 base model weights ==="
 mkdir -p "$WEIGHTS_DIR"
 

@@ -1,4 +1,6 @@
 name: sandboxaq
+# Install to /mnt/data/sandeep/conda/envs/sandboxaq with:
+#   conda env create -f sandboxaq_environment.yml --prefix /mnt/data/sandeep/conda/envs/sandboxaq
 channels:
   - bioconda
   - defaults
@@ -71,7 +73,7 @@ dependencies:
       - gitpython==3.1.46
       - protobuf==6.33.4
       - sentry-sdk==2.51.0
-      # Install aqaffinity last — it pulls in openfold3 automatically
-      - git+https://huggingface.co/SandboxAQ/aqaffinity
+      # aqaffinity + openfold3 are installed separately in the setup script
+      # (downloaded via 'hf download' then 'pip install' from local path)
 variables:
-  OPENFOLD_CACHE: ~/.openfold3
+  OPENFOLD_CACHE: /mnt/data/sandeep/openfold3_weights
