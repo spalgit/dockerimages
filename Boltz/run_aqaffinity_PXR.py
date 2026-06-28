@@ -19,10 +19,6 @@ import numpy as np
 import pandas as pd
 from pathlib import Path
 
-# DeepSpeed tries to compile CUDA ops if CUDA_HOME/nvcc is found.
-# For inference we don't need compiled ops — disable them unconditionally.
-os.environ["DS_BUILD_OPS"] = "0"
-os.environ["DS_SKIP_CUDA_CHECK"] = "1"
 
 # ── Full human PXR sequence ────────────────────────────────────────────────────
 # UniProt O75469 (NR1I2_HUMAN), canonical isoform 1, 434 aa
@@ -135,9 +131,17 @@ def run_aqaffinity(query_json: Path, out_dir: Path) -> bool:
         "--use_templates", "true",
         "--output_dir", str(out_dir),
     ]
+    # Build a clean env: remove CUDA_HOME so DeepSpeed won't try to run nvcc,
+    # and disable DeepSpeed CUDA op compilation (not needed for inference).
+    env = os.environ.copy()
+    env.pop("CUDA_HOME", None)
+    env.pop("CUDA_PATH", None)
+    env["DS_BUILD_OPS"] = "0"
+    env["DS_SKIP_CUDA_CHECK"] = "1"
+
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=3600,
-                                env=os.environ)
+                                env=env)
         ok = result.returncode == 0
         if not ok:
             print(f"    FAIL (exit {result.returncode})")
