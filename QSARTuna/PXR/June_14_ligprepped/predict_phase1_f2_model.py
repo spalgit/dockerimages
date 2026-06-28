@@ -29,8 +29,8 @@ from chemprop import data, featurizers, models
 # ── Paths ──────────────────────────────────────────────────────────────────────
 HERE = Path(__file__).parent
 
-F1_SDF         = HERE / "train_set_AND_phase_one_results_4392_ligpreped_f_1.sdf"
-F2_TRAIN_SDF   = HERE / "train_set_4139_ligpreped_f_2.sdf"
+F1_SDF         = HERE / "train_set_AND_phase_one_results_4392_ligpreped_f_1_n_1_2_3.sdf"
+F2_TRAIN_SDF   = HERE / "train_set_4139_ligpreped_f_2_n_1_2_3.sdf"
 ENSEMBLE_DIR   = HERE / "f2_ensemble_models"
 TEST_PHASE1_SDF = HERE / "test_phase1.sdf"
 OUTPUT_CSV     = HERE / "test_phase1_f2_predictions.csv"

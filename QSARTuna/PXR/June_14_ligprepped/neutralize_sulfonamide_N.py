@@ -6,9 +6,8 @@ from rdkit import Chem
 import os
 
 FILES = [
-    "train_set_AND_phase_one_results_4392_ligpreped_f_1.sdf",
-    "train_set_4139_ligpreped_f_2.sdf",
-    "test_phase2_ligprepped_f_2.sdf",
+    "Chembl_pxr_ligprepped.sdf",
+    "Chembl_pxr_ligprepped_1.sdf",
 ]
 
 
