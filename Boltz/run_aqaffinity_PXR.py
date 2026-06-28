@@ -19,6 +19,20 @@ import numpy as np
 import pandas as pd
 from pathlib import Path
 
+# DeepSpeed requires CUDA_HOME to point to the toolkit (nvcc + headers).
+# Auto-detect common locations if not already set.
+if "CUDA_HOME" not in os.environ:
+    for _candidate in ["/usr/local/cuda", "/usr/local/cuda-12", "/usr/local/cuda-12.0",
+                       "/usr/local/cuda-12.1", "/usr/local/cuda-12.2", "/usr/local/cuda-12.4",
+                       "/usr/local/cuda-12.6", "/usr/local/cuda-12.8"]:
+        if Path(_candidate).exists():
+            os.environ["CUDA_HOME"] = _candidate
+            print(f"Auto-set CUDA_HOME={_candidate}")
+            break
+    else:
+        print("WARNING: CUDA_HOME not set and no /usr/local/cuda* found. "
+              "Set it manually: export CUDA_HOME=/usr/local/cuda")
+
 # ── Full human PXR sequence ────────────────────────────────────────────────────
 # UniProt O75469 (NR1I2_HUMAN), canonical isoform 1, 434 aa
 PXR_SEQUENCE = (
@@ -131,7 +145,8 @@ def run_aqaffinity(query_json: Path, out_dir: Path) -> bool:
         "--output_dir", str(out_dir),
     ]
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=3600,
+                                env=os.environ)
         ok = result.returncode == 0
         if not ok:
             print(f"    FAIL (exit {result.returncode})")
