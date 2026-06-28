@@ -3,65 +3,83 @@
 # sandboxaq VM setup script
 # Sets up the conda environment for AQAffinity (OpenFold3 + SandboxAQ affinity head)
 #
+# All data, weights, and the conda environment are installed under /mnt/data/sandeep
+#
 # Requirements:
 #   - NVIDIA GPU with CUDA 12.x driver (check: nvidia-smi)
 #   - Miniconda or Anaconda installed
-#   - ~30 GB free disk space (packages + model weights)
-#   - HuggingFace account with access to SandboxAQ/aqaffinity model
+#   - ~30 GB free disk space on /mnt/data/sandeep
+#   - HuggingFace account with access to SandboxAQ/aqaffinity
 #     (request access at: https://huggingface.co/SandboxAQ/aqaffinity)
+#   - Log in before running: huggingface-cli login
 # =============================================================================
 
 set -e
 
-echo "=== Step 1: Create conda environment ==="
-conda env create -f sandboxaq_environment.yml
+BASE=/mnt/data/sandeep
+ENV_PREFIX=$BASE/conda/envs/sandboxaq
+WEIGHTS_DIR=$BASE/openfold3_weights
 
-echo "=== Step 2: Activate environment ==="
-# Note: 'conda activate' doesn't work in scripts; use 'conda run' or source first
-source "$(conda info --base)/etc/profile.d/conda.sh"
-conda activate sandboxaq
+echo "=== Paths ==="
+echo "  Conda env  : $ENV_PREFIX"
+echo "  Weights    : $WEIGHTS_DIR"
+echo ""
 
-echo "=== Step 3: Download OpenFold3 model weights ==="
-# Weights are downloaded automatically on first run via huggingface-hub.
-# To pre-download them manually:
-mkdir -p ~/.openfold3
+# ---------------------------------------------------------------------------
+echo "=== Step 1: Create conda environment at $ENV_PREFIX ==="
+# Using --prefix installs into /mnt/data/sandeep instead of ~/miniconda3/envs/
+conda env create \
+    -f sandboxaq_environment.yml \
+    --prefix "$ENV_PREFIX"
 
-python - <<'EOF'
+# ---------------------------------------------------------------------------
+echo ""
+echo "=== Step 2: Configure conda to recognise the prefix-based env ==="
+# Add the envs dir so 'conda activate sandboxaq' works by name
+conda config --append envs_dirs "$BASE/conda/envs"
+
+# ---------------------------------------------------------------------------
+echo ""
+echo "=== Step 3: Download OpenFold3 base model weights ==="
+mkdir -p "$WEIGHTS_DIR"
+
+conda run --prefix "$ENV_PREFIX" python - <<EOF
 from huggingface_hub import hf_hub_download
-import shutil, os
 
-cache = os.path.expanduser("~/.openfold3")
+weights_dir = "$WEIGHTS_DIR"
 
-# OpenFold3 base model (fine-tuned v1)
-print("Downloading of3_ft3_v1.pt ...")
+print("Downloading of3_ft3_v1.pt  (OpenFold3 base model) ...")
 path = hf_hub_download(
     repo_id="OpenFold/openfold3",
     filename="of3_ft3_v1.pt",
-    local_dir=cache,
+    local_dir=weights_dir,
 )
 print(f"  -> {path}")
 EOF
 
+# ---------------------------------------------------------------------------
 echo ""
 echo "=== Step 4: Download AQAffinity binding-head weights ==="
-python - <<'EOF'
+
+conda run --prefix "$ENV_PREFIX" python - <<EOF
 from huggingface_hub import hf_hub_download
-import os
 
-cache = os.path.expanduser("~/.openfold3")
+weights_dir = "$WEIGHTS_DIR"
 
-print("Downloading AQAffinity model_weights_only.pt ...")
+print("Downloading model_weights_only.pt  (AQAffinity binding head) ...")
 path = hf_hub_download(
     repo_id="SandboxAQ/aqaffinity",
     filename="model_weights/model_weights_only.pt",
-    local_dir=cache,
+    local_dir=weights_dir,
 )
 print(f"  -> {path}")
 EOF
 
+# ---------------------------------------------------------------------------
 echo ""
 echo "=== Step 5: Verify installation ==="
-conda run -n sandboxaq python - <<'EOF'
+
+conda run --prefix "$ENV_PREFIX" python - <<'EOF'
 import torch
 print(f"PyTorch      : {torch.__version__}")
 print(f"CUDA avail   : {torch.cuda.is_available()}")
@@ -72,23 +90,27 @@ import openfold3
 print(f"OpenFold3    : {openfold3.__version__}")
 
 import aqaffinity
-print(f"AQAffinity   : OK")
+print("AQAffinity   : OK")
 
-import kalign
-print(f"kalign2      : OK")
+from pathlib import Path
+import subprocess
+result = subprocess.run(["kalign", "--version"], capture_output=True, text=True)
+print(f"kalign2      : {result.stdout.strip() or result.stderr.strip()}")
 EOF
 
+# ---------------------------------------------------------------------------
 echo ""
 echo "=== Setup complete ==="
 echo ""
-echo "To run PXR predictions:"
+echo "Activate the environment:"
+echo "  conda activate $ENV_PREFIX"
+echo "  # or, after 'conda config --append envs_dirs $BASE/conda/envs':"
 echo "  conda activate sandboxaq"
-echo "  cd <your_working_dir>"
+echo ""
+echo "Run PXR predictions:"
+echo "  cd $BASE"
 echo "  python run_aqaffinity_PXR.py input_ligands_Batch_1.csv --out_dir pxr_aqaffinity_results"
 echo ""
-echo "Model weight paths expected by the run script:"
-echo "  OF3 checkpoint   : ~/.openfold3/of3_ft3_v1.pt"
-echo "  Affinity weights : ~/.openfold3/model_weights/model_weights_only.pt"
-echo ""
-echo "NOTE: Update OF3_CKPT and AFFINITY_CKPT paths in run_aqaffinity_PXR.py"
-echo "      if you place the weights in a different location."
+echo "Weight paths (already configured in run_aqaffinity_PXR.py):"
+echo "  OF3 checkpoint   : $WEIGHTS_DIR/of3_ft3_v1.pt"
+echo "  Affinity weights : $WEIGHTS_DIR/model_weights/model_weights_only.pt"
