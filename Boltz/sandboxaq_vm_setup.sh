@@ -11,7 +11,7 @@
 #   - ~30 GB free disk space on /mnt/data/sandeep
 #   - HuggingFace account with access to SandboxAQ/aqaffinity
 #     (request access at: https://huggingface.co/SandboxAQ/aqaffinity)
-#   - Log in before running: huggingface-cli login
+#   - Log in before running: hf auth login
 # =============================================================================
 
 set -e
