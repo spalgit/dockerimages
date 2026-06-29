@@ -129,15 +129,18 @@ def run_openfold3(query_json: Path, out_dir: Path) -> bool:
         "run_openfold", "predict",
         "--query-json", str(query_json),
         "--use-msa-server", "true",
-        "--use-templates", "true",
+        "--use-templates", "false",
         "--output-dir", str(out_dir),
     ]
     if OF3_CKPT:
         cmd += ["--inference-ckpt-path", OF3_CKPT]
 
     env = os.environ.copy()
-    # Redirect openfold3 auto-download cache to the large data partition
     env.setdefault("OPENFOLD_CACHE", "/mnt/data/sandeep/openfold3_weights")
+    env["DS_BUILD_OPS"] = "0"
+    env["DS_SKIP_CUDA_CHECK"] = "1"
+    env.pop("CUDA_HOME", None)
+    env.pop("CUDA_PATH", None)
 
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=3600, env=env)
