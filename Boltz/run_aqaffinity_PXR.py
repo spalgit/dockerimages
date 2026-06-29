@@ -41,8 +41,9 @@ def _find_path(*candidates):
     return str(Path(candidates[-1]).expanduser())  # fallback (will error at runtime)
 
 OF3_CKPT = _find_path(
-    "/mnt/data/sandeep/openfold3_weights/of3_ft3_v1.pt",  # VM path
-    "~/.openfold3/of3_ft3_v1.pt",                          # local WSL path
+    "/mnt/data/sandeep/openfold3_weights/checkpoints/of3_ft3_v1.pt",  # VM path (new HF layout)
+    "/mnt/data/sandeep/openfold3_weights/of3_ft3_v1.pt",              # VM path (old layout)
+    "~/.openfold3/of3_ft3_v1.pt",                                      # local WSL path
 )
 AFFINITY_CKPT = _find_path(
     "/mnt/data/sandeep/openfold3_weights/model_weights/model_weights_only.pt",  # VM path
