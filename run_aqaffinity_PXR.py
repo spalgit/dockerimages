@@ -19,7 +19,6 @@ import numpy as np
 import pandas as pd
 from pathlib import Path
 
-
 # ── Full human PXR sequence ────────────────────────────────────────────────────
 # UniProt O75469 (NR1I2_HUMAN), canonical isoform 1, 434 aa
 PXR_SEQUENCE = (
@@ -41,12 +40,11 @@ def _find_path(*candidates):
     return str(Path(candidates[-1]).expanduser())  # fallback (will error at runtime)
 
 OF3_CKPT = _find_path(
-    "/mnt/data/sandeep/openfold3_weights/of3_ft3_v1.pt",  # VM path
-    "~/.openfold3/of3_ft3_v1.pt",                          # local WSL path
+    "~/.openfold3/of3_ft3_v1.pt",
 )
 AFFINITY_CKPT = _find_path(
-    "/mnt/data/sandeep/openfold3_weights/model_weights/model_weights_only.pt",  # VM path
-    "~/aqaffinity/model_weights/model_weights_only.pt",                          # local WSL path
+    "~/.openfold3/model_weights/model_weights_only.pt",  # VM path (downloaded via setup script)
+    "~/aqaffinity/model_weights/model_weights_only.pt",   # local WSL path
 )
 
 
@@ -120,36 +118,19 @@ def make_query_json(compound_id: str, smiles: str, json_path: Path):
         json.dump(query, f, indent=2)
 
 
-def _write_runner_yaml(path: Path):
-    """Write a minimal runner YAML that satisfies aqaffinity's experiment_settings check."""
-    path.write_text("experiment_settings:\n  seeds: [42]\n")
-
-
 def run_aqaffinity(query_json: Path, out_dir: Path) -> bool:
     """Run aqaffinity predict for a single compound. Returns True on success."""
-    runner_yaml = out_dir / "runner.yaml"
-    _write_runner_yaml(runner_yaml)
     cmd = [
         "aqaffinity", "predict",
         "--query_json", str(query_json),
         "--inference_ckpt_path", OF3_CKPT,
         "--binding_affinity_ckpt_path", AFFINITY_CKPT,
-        "--runner_yaml", str(runner_yaml),
         "--use_msa_server", "true",
         "--use_templates", "true",
         "--output_dir", str(out_dir),
     ]
-    # Build a clean env: remove CUDA_HOME so DeepSpeed won't try to run nvcc,
-    # and disable DeepSpeed CUDA op compilation (not needed for inference).
-    env = os.environ.copy()
-    env.pop("CUDA_HOME", None)
-    env.pop("CUDA_PATH", None)
-    env["DS_BUILD_OPS"] = "0"
-    env["DS_SKIP_CUDA_CHECK"] = "1"
-
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=3600,
-                                env=env)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
         ok = result.returncode == 0
         if not ok:
             print(f"    FAIL (exit {result.returncode})")
