@@ -11,8 +11,10 @@ Usage (conda activate openfold3 first):
 """
 
 import argparse
+import getpass
 import json
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -112,7 +114,17 @@ def make_query_json(compound_id: str, smiles: str, json_path: Path):
         json.dump(query, f, indent=2)
 
 
+def _cleanup_colabfold_tmp(tmpdir: str):
+    """Remove stale ColabFold MSA raw dir left by a previous run."""
+    raw_dir = Path(tmpdir) / f"of3-of-{getpass.getuser()}" / "colabfold_msas" / "raw"
+    if raw_dir.exists():
+        shutil.rmtree(raw_dir)
+
+
 def run_openfold3(query_json: Path, out_dir: Path) -> bool:
+    tmpdir = os.environ.get("TMPDIR", "/mnt/data/sandeep/tmp")
+    _cleanup_colabfold_tmp(tmpdir)
+
     cmd = [
         "run_openfold", "predict",
         "--query-json", str(query_json),
