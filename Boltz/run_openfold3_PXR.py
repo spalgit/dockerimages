@@ -16,6 +16,7 @@ import json
 import os
 import shutil
 import subprocess
+import time
 from pathlib import Path
 
 import pandas as pd
@@ -103,9 +104,9 @@ def make_query_json(compound_id: str, smiles: str, json_path: Path):
                         "sdf_file_path": None,
                     },
                 ],
-                "use_msas": True,
-                "use_paired_msas": True,
-                "use_main_msas": True,
+                "use_msas": False,
+                "use_paired_msas": False,
+                "use_main_msas": False,
                 "covalent_bonds": None,
             }
         },
@@ -128,7 +129,7 @@ def run_openfold3(query_json: Path, out_dir: Path) -> bool:
     cmd = [
         "run_openfold", "predict",
         "--query-json", str(query_json),
-        "--use-msa-server", "true",
+        "--use-msa-server", "false",
         "--use-templates", "false",
         "--output-dir", str(out_dir),
     ]
@@ -205,6 +206,7 @@ def main():
         ok = run_openfold3(json_path, compound_out)
         if ok:
             successful += 1
+        time.sleep(5)  # avoid ColabFold API rate-limiting
 
     print(f"\nCompleted: {successful}/{len(compounds)} successful")
     print(f"Structures in: {results_root}/")
