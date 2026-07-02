@@ -2,7 +2,7 @@
 """
 MCS-constrained multi-conformer overlay with shape and optional ESP scoring.
 
-Workflow:
+Default workflow (re-embedding):
   1. Find MCS between reference and each query (heavy atoms).
   2. Extract the MCS core with 3D coordinates from the reference.
   3. Generate N ETKDG conformers of the query pinned to the core (tethered UFF
@@ -10,19 +10,26 @@ Workflow:
   4. Score every conformer by ShapeTanimoto vs. the reference; write the best pose.
   5. Optionally compute ESP similarity for the best pose.
 
+--use_existing_3d workflow (fast; for pre-docked / pre-embedded inputs):
+  1. Find MCS between reference and each query.
+  2. Rigidly align the existing query conformer onto the reference via the
+     MCS atom mapping (AlignMol).  Falls back to Crippen O3A if MCS is absent.
+  3. Score ShapeTanimoto (and optionally ESP) and write.
+
 Falls back to Crippen O3A alignment if no MCS match is found or constrained
 embedding fails.
 
 Usage (run inside the espsim conda environment):
-  conda run -n espsim python ~/mcs_overlay.py reference.sdf query.sdf output.sdf [options]
+  conda run -n espsim python mcs_overlay.py reference.sdf query.sdf output.sdf [options]
 
 Options:
-  --num_confs INT        Conformers per query (default 50)
+  --num_confs INT        Conformers per query (default 50; ignored with --use_existing_3d)
   --min_mcs_ratio FLOAT  Min MCS / reference heavy-atom fraction (default 0.1)
-  --no_complete_rings    Allow MCS to break rings
-  --esp                  Also compute ESP similarity (Gasteiger by default)
+  --no_complete_rings    Allow MCS to match partial rings
+  --use_existing_3d      Align and score the existing 3D pose without re-embedding
+  --esp                  Compute ESP similarity for the best pose
   --partial_charges STR  gasteiger | mmff  (default gasteiger)
-  --all_confs            Write every conformer ranked by shape (not just best)
+  --all_confs            Write all conformers ranked by shape (ignored with --use_existing_3d)
 """
 
 import argparse
@@ -146,6 +153,37 @@ def embed_query(query_noh, core, ref_noh, num_confs, seed=42):
 
 
 # ---------------------------------------------------------------------------
+# Existing-3D alignment (no re-embedding)
+# ---------------------------------------------------------------------------
+
+def align_existing_3d(query_noh, ref_noh, core):
+    """
+    Rigidly align query_noh's existing conformer onto ref_noh using MCS atom
+    mapping.  Returns (method_label, mcs_rmsd).
+
+    If core is None or substructure matching fails, falls back to Crippen O3A.
+    query_noh is modified in place (conformer coordinates updated).
+    """
+    if core is not None:
+        ref_match = ref_noh.GetSubstructMatch(core)
+        query_match = query_noh.GetSubstructMatch(core)
+        if ref_match and query_match:
+            atom_map = list(zip(query_match, ref_match))
+            rmsd = AllChem.AlignMol(query_noh, ref_noh, atomMap=atom_map)
+            return "MCS_rigid", rmsd
+
+    # Fallback: Crippen O3A on the single existing conformer
+    try:
+        qcrippen = rdMolDescriptors._CalcCrippenContribs(query_noh)
+        rcrippen = rdMolDescriptors._CalcCrippenContribs(ref_noh)
+        aln = rdMolAlign.GetCrippenO3A(query_noh, ref_noh, qcrippen, rcrippen, 0, 0)
+        aln.Align()
+        return "CrippenO3A", None
+    except Exception as e:
+        raise ValueError(f"Crippen O3A fallback failed: {e}")
+
+
+# ---------------------------------------------------------------------------
 # Scoring
 # ---------------------------------------------------------------------------
 
@@ -179,18 +217,22 @@ def main():
     parser.add_argument('query', help='Query SDF (one or more molecules)')
     parser.add_argument('output', help='Output SDF with best-aligned poses')
     parser.add_argument('--num_confs', type=int, default=50,
-                        help='Conformers per query molecule (default 50)')
+                        help='Conformers per query molecule (default 50; '
+                             'ignored with --use_existing_3d)')
     parser.add_argument('--min_mcs_ratio', type=float, default=0.1,
                         help='Min MCS heavy-atom coverage of reference (default 0.1)')
     parser.add_argument('--no_complete_rings', action='store_true',
                         help='Allow MCS to match partial rings')
+    parser.add_argument('--use_existing_3d', action='store_true',
+                        help='Align and score existing 3D poses without re-embedding')
     parser.add_argument('--esp', action='store_true',
                         help='Compute ESP similarity for the best pose')
     parser.add_argument('--partial_charges', default='gasteiger',
                         choices=['gasteiger', 'mmff'],
                         help='Charge method for ESP (default gasteiger)')
     parser.add_argument('--all_confs', action='store_true',
-                        help='Write all conformers ranked by shape (not just best)')
+                        help='Write all conformers ranked by shape '
+                             '(not just best; ignored with --use_existing_3d)')
     args = parser.parse_args()
 
     # --- Load reference ---
@@ -212,9 +254,10 @@ def main():
     if not queries:
         sys.exit(f"No valid molecules in {args.query}")
 
+    mode = "existing 3D (rigid MCS align)" if args.use_existing_3d else f"{args.num_confs} conformers"
     print(f"Reference : {ref_noh.GetNumAtoms()} heavy atoms")
     print(f"Queries   : {len(queries)} molecules")
-    print(f"Conformers: {args.num_confs} per query")
+    print(f"Mode      : {mode}")
 
     writer = Chem.SDWriter(args.output)
 
@@ -230,6 +273,8 @@ def main():
         if core is None:
             print("  No MCS found.")
             core_smi = "N/A"
+            mcs_natoms = 0
+            mcs_ratio = 0.0
         else:
             core_smi = Chem.MolToSmiles(core)
             print(f"  MCS : {core_smi}  |  {mcs_natoms} atoms  |  "
@@ -239,59 +284,104 @@ def main():
                       f"{args.min_mcs_ratio:.2f} → using free alignment.")
                 core = None
 
-        # Embed + align
-        try:
-            qmol_confs, method = embed_query(
-                qmol, core, ref_noh, args.num_confs
-            )
-        except ValueError as e:
-            print(f"  Embedding failed: {e}. Skipping.")
-            continue
-
-        # Shape scoring
-        scores = score_conformers(qmol_confs, ref_noh)
-        if not scores:
-            print("  Shape scoring failed. Skipping.")
-            continue
-
-        best_shape, best_cid = scores[0]
-        print(f"  Best ShapeTanimoto : {best_shape:.4f}  (conf {best_cid} / "
-              f"{len(scores)})")
-
-        # ESP similarity for best conformer
-        best_esp = None
-        if args.esp:
+        # ----- Branch: use existing 3D or re-embed -----
+        if args.use_existing_3d:
+            if qmol.GetNumConformers() == 0:
+                print("  No 3D conformer in query molecule. Skipping.")
+                continue
+            qmol_work = copy.deepcopy(qmol)
             try:
-                best_esp = GetEspSim(
-                    qmol_confs, ref_noh,
-                    prbCid=best_cid, refCid=0,
-                    partialCharges=args.partial_charges,
-                    renormalize=True,
-                    nocheck=True,
-                )
-                print(f"  ESP ({args.partial_charges})          : {best_esp:.4f}")
-            except Exception as e:
-                print(f"  ESP failed: {e}")
+                method, mcs_rmsd = align_existing_3d(qmol_work, ref_noh, core)
+            except ValueError as e:
+                print(f"  Alignment failed: {e}. Skipping.")
+                continue
+            rmsd_str = f"{mcs_rmsd:.3f} Å" if mcs_rmsd is not None else "n/a"
+            print(f"  Method: {method}  |  MCS RMSD: {rmsd_str}")
+            scores = score_conformers(qmol_work, ref_noh)
+            if not scores:
+                print("  Shape scoring failed. Skipping.")
+                continue
+            best_shape, best_cid = scores[0]
+            print(f"  ShapeTanimoto : {best_shape:.4f}")
 
-        # Prepare output molecule (strip Hs for SDF readability)
-        out_noh = Chem.RemoveHs(qmol_confs)
-        out_noh.SetProp('_Name', name)
-        out_noh.SetProp('ShapeTanimoto', f'{best_shape:.4f}')
-        out_noh.SetProp('MCS_NumAtoms', str(mcs_natoms))
-        out_noh.SetProp('MCS_CoverageRef', f'{mcs_ratio:.4f}')
-        out_noh.SetProp('MCS_SMILES', core_smi)
-        out_noh.SetProp('AlignmentMethod', method)
-        if best_esp is not None:
-            out_noh.SetProp(f'ESPSim_{args.partial_charges}', f'{best_esp:.4f}')
+            best_esp = None
+            if args.esp:
+                try:
+                    best_esp = GetEspSim(
+                        qmol_work, ref_noh,
+                        prbCid=best_cid, refCid=0,
+                        partialCharges=args.partial_charges,
+                        renormalize=True,
+                        nocheck=True,
+                    )
+                    print(f"  ESP ({args.partial_charges}) : {best_esp:.4f}")
+                except Exception as e:
+                    print(f"  ESP failed: {e}")
 
-        if args.all_confs:
-            for rank, (shape, cid) in enumerate(scores):
-                m = copy.deepcopy(out_noh)
-                m.SetProp('ShapeTanimoto', f'{shape:.4f}')
-                m.SetProp('ConformerRank', str(rank + 1))
-                writer.write(m, confId=cid)
-        else:
+            out_noh = Chem.RemoveHs(qmol_work)
+            out_noh.SetProp('_Name', name)
+            out_noh.SetProp('ShapeTanimoto', f'{best_shape:.4f}')
+            out_noh.SetProp('MCS_NumAtoms', str(mcs_natoms))
+            out_noh.SetProp('MCS_CoverageRef', f'{mcs_ratio:.4f}')
+            out_noh.SetProp('MCS_SMILES', core_smi)
+            out_noh.SetProp('AlignmentMethod', method)
+            if mcs_rmsd is not None:
+                out_noh.SetProp('MCS_RMSD', f'{mcs_rmsd:.4f}')
+            if best_esp is not None:
+                out_noh.SetProp(f'ESPSim_{args.partial_charges}', f'{best_esp:.4f}')
             writer.write(out_noh, confId=best_cid)
+
+        else:
+            # Re-embed from scratch
+            try:
+                qmol_confs, method = embed_query(
+                    qmol, core, ref_noh, args.num_confs
+                )
+            except ValueError as e:
+                print(f"  Embedding failed: {e}. Skipping.")
+                continue
+
+            scores = score_conformers(qmol_confs, ref_noh)
+            if not scores:
+                print("  Shape scoring failed. Skipping.")
+                continue
+
+            best_shape, best_cid = scores[0]
+            print(f"  Best ShapeTanimoto : {best_shape:.4f}  "
+                  f"(conf {best_cid} / {len(scores)})")
+
+            best_esp = None
+            if args.esp:
+                try:
+                    best_esp = GetEspSim(
+                        qmol_confs, ref_noh,
+                        prbCid=best_cid, refCid=0,
+                        partialCharges=args.partial_charges,
+                        renormalize=True,
+                        nocheck=True,
+                    )
+                    print(f"  ESP ({args.partial_charges}) : {best_esp:.4f}")
+                except Exception as e:
+                    print(f"  ESP failed: {e}")
+
+            out_noh = Chem.RemoveHs(qmol_confs)
+            out_noh.SetProp('_Name', name)
+            out_noh.SetProp('ShapeTanimoto', f'{best_shape:.4f}')
+            out_noh.SetProp('MCS_NumAtoms', str(mcs_natoms))
+            out_noh.SetProp('MCS_CoverageRef', f'{mcs_ratio:.4f}')
+            out_noh.SetProp('MCS_SMILES', core_smi)
+            out_noh.SetProp('AlignmentMethod', method)
+            if best_esp is not None:
+                out_noh.SetProp(f'ESPSim_{args.partial_charges}', f'{best_esp:.4f}')
+
+            if args.all_confs:
+                for rank, (shape, cid) in enumerate(scores):
+                    m = copy.deepcopy(out_noh)
+                    m.SetProp('ShapeTanimoto', f'{shape:.4f}')
+                    m.SetProp('ConformerRank', str(rank + 1))
+                    writer.write(m, confId=cid)
+            else:
+                writer.write(out_noh, confId=best_cid)
 
     writer.close()
     print(f"\nDone. Output → {args.output}")
