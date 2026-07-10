@@ -7,3 +7,6 @@
 __pycache__/
 *.pyc
 .DS_Store
+Cache/pipeline/first_model_outputs/
+Cache/pipeline/first_model_smoke_outputs/
+Cache/pipeline/**/*.parquet
