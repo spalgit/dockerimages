@@ -1,0 +1,26 @@
+{
+  "config": "pipeline/first_model_smoke_config.yaml",
+  "models": {
+    "broad": {
+      "kind": "classifier",
+      "path": "pipeline/first_model_smoke_outputs/model_broad.joblib"
+    },
+    "strict": {
+      "kind": "classifier",
+      "path": "pipeline/first_model_smoke_outputs/model_strict.joblib"
+    },
+    "orthosteric": {
+      "kind": "classifier",
+      "path": "pipeline/first_model_smoke_outputs/model_orthosteric.joblib"
+    },
+    "zscore": {
+      "kind": "regressor",
+      "path": "pipeline/first_model_smoke_outputs/model_zscore.joblib"
+    }
+  },
+  "metrics_path": "pipeline/first_model_smoke_outputs/holdout_metrics.json",
+  "validation_submission": "pipeline/first_model_smoke_outputs/Team_YOURTEAMNAME_smoke_lgbm_ecfp_ensemble_v1_validation.txt",
+  "test_submission": "pipeline/first_model_smoke_outputs/Team_YOURTEAMNAME_smoke_lgbm_ecfp_ensemble_v1_test.csv",
+  "validation_selected_count": 50,
+  "test_selected_count": 50
+}

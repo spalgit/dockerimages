@@ -1,0 +1,82 @@
+paths:
+  train_labeled: pipeline/PGK2_train_labeled.parquet
+  validation_csv: Val-Test-set/PGK2_Validation_split.csv
+  test_csv: Val-Test-set/PGK2_Test_split.csv
+  output_dir: pipeline/first_model_smoke_outputs
+
+run:
+  seed: 42
+  n_jobs: 4
+  top_pool_size: 500
+  final_pick_count: 50
+  team_name: Team_YOURTEAMNAME
+  submission_id: smoke_lgbm_ecfp_ensemble_v1
+  debug_max_train_rows: 5000
+  debug_max_validation_rows: 2000
+  debug_max_test_rows: 2000
+
+features:
+  fp_size: 1024
+  radii: [2]
+
+split:
+  scaffold_holdout_fraction: 0.20
+
+targets:
+  broad:
+    kind: classifier
+    include: broad_all
+    positive:
+      label_column: LABEL
+      label_value: 1
+  strict:
+    kind: classifier
+    include: strict_pos_and_broad_neg
+    positive:
+      min_count_pgk2: 10
+      max_count_ntc: 0
+      max_historic_hits: 5
+  orthosteric:
+    kind: classifier
+    include: orthosteric_pos_and_broad_neg
+    positive:
+      min_count_pgk2: 3
+      max_count_pgk2_with_inhibitor: 0
+      max_count_ntc: 0
+      max_historic_hits: 5
+  zscore:
+    kind: regressor
+    include: broad_all
+    target_column: zscore_PGK2
+
+models:
+  classifier:
+    n_estimators: 50
+    learning_rate: 0.08
+    num_leaves: 31
+    max_depth: -1
+    min_child_samples: 20
+    subsample: 0.85
+    colsample_bytree: 0.75
+    reg_alpha: 0.1
+    reg_lambda: 1.0
+  regressor:
+    n_estimators: 50
+    learning_rate: 0.08
+    num_leaves: 31
+    max_depth: -1
+    min_child_samples: 20
+    subsample: 0.85
+    colsample_bytree: 0.75
+    reg_alpha: 0.1
+    reg_lambda: 1.0
+
+ensemble:
+  broad: 0.40
+  strict: 0.25
+  orthosteric: 0.20
+  zscore: 0.15
+
+selection:
+  max_per_murcko_scaffold: 1
+  min_tanimoto_distance: 0.25
