@@ -72,10 +72,10 @@ models:
     reg_lambda: 1.0
 
 ensemble:
-  broad: 0.40
-  strict: 0.25
-  orthosteric: 0.20
-  zscore: 0.15
+  broad: 0.50
+  strict: 0.30
+  orthosteric: 0.0  # diagnostic only -- see first_model_config.yaml's note
+  zscore: 0.20
 
 selection:
   max_per_murcko_scaffold: 1

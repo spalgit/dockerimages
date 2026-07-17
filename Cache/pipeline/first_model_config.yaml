@@ -10,7 +10,7 @@ run:
   top_pool_size: 5000
   final_pick_count: 50
   team_name: Team_YOURTEAMNAME
-  submission_id: lgbm_ecfp_ensemble_v1
+  submission_id: lgbm_ecfp_ensemble_v2_nocompetitor
   debug_max_train_rows:
   debug_max_validation_rows:
   debug_max_test_rows:
@@ -37,6 +37,15 @@ targets:
       max_count_ntc: 0
       max_historic_hits: 5
   orthosteric:
+    # Diagnostic/mechanism-flag model only -- NOT part of the submitted
+    # ensemble score (weight 0.0 below). Its positive label depends on
+    # count_PGK2_with_inhibitor, which only exists for compounds tested
+    # *with* the competitor present; the CACHE organizers specifically
+    # want training compounds selected from data tested in the absence of
+    # a competitor. Kept here only so its score_orthosteric column is
+    # still reported for inspection (e.g. flagging likely-orthosteric
+    # hits), not used to rank or select the top-50. See
+    # PGK2_VALIDATION_SUBMISSION_LOG.md, 2026-07-17 entry.
     kind: classifier
     include: orthosteric_pos_and_broad_neg
     positive:
@@ -72,10 +81,10 @@ models:
     reg_lambda: 1.0
 
 ensemble:
-  broad: 0.40
-  strict: 0.25
-  orthosteric: 0.20
-  zscore: 0.15
+  broad: 0.50
+  strict: 0.30
+  orthosteric: 0.0  # diagnostic only, see note on the target above
+  zscore: 0.20
 
 selection:
   max_per_murcko_scaffold: 1

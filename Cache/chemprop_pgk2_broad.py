@@ -1,4 +1,21 @@
-"""ChemProp binary classifier for PGK2 orthosteric hit prediction.
+"""ChemProp binary classifier for PGK2 hit prediction (broad, no-competitor label).
+
+Renamed from chemprop_pgk2_orthosteric.py on 2026-07-17: the training data
+this script consumes (PGK2_train_broad_2to1/50to50.parquet, built by
+build_train_variants.py) now uses the broad hit label — count_PGK2 >= 3,
+count_NTC == 0, historic_hits < 5 — instead of the stricter orthosteric
+criteria (count_PGK2_with_inhibitor < 0.1 * count_PGK2). The CACHE
+organizers specifically want training compounds picked from data tested in
+the absence of a competitor, i.e. the count_PGK2 condition alone; the old
+orthosteric criteria used the count_PGK2_with_inhibitor column (only
+meaningful for compounds tested *with* a competitor present) to help decide
+which compounds counted as hits at all, which both violated that guidance
+and diverged from this project's own 2026-07-06 decision to include both
+orthosteric and allosteric binders in the primary label. See
+PGK2_VALIDATION_SUBMISSION_LOG.md for the full history: the four ChemProp
+validation submissions built from the old orthosteric-labeled training data
+all scored 0 hits, and were dominated by the same BB3-805 chemotype found
+in the LightGBM ensemble's picks — this retrain is the direct follow-up.
 
 Architecture: ChemProp's default/recommended parameters. Iqbal et al. 2025
 (npj Drug Discovery 2:5, "Evaluation of DNA encoded library and machine
@@ -33,7 +50,7 @@ cluster-stratified negative sampling).
 
 Usage:
     conda activate chemprop
-    python chemprop_pgk2_orthosteric.py
+    python chemprop_pgk2_broad.py
 """
 
 import random
@@ -56,8 +73,8 @@ RDLogger.DisableLog("rdApp.*")
 HERE = Path(__file__).resolve().parent
 
 VARIANTS = {
-    "2to1": HERE / "PGK2_train_orthosteric_2to1.parquet",
-    "50to50": HERE / "PGK2_train_orthosteric_50to50.parquet",
+    "2to1": HERE / "PGK2_train_broad_2to1.parquet",
+    "50to50": HERE / "PGK2_train_broad_50to50.parquet",
 }
 
 MODEL_DIR = HERE / "chemprop_models"
