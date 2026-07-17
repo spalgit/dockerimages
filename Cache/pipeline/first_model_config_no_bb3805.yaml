@@ -1,0 +1,84 @@
+paths:
+  train_labeled: pipeline/PGK2_train_labeled_no_bb3805.parquet
+  validation_csv: Val-Test-set/PGK2_Validation_split.csv
+  test_csv: Val-Test-set/PGK2_Test_split.csv
+  output_dir: pipeline/first_model_outputs_no_bb3805
+
+run:
+  seed: 42
+  n_jobs: -1
+  top_pool_size: 5000
+  final_pick_count: 50
+  team_name: Team_YOURTEAMNAME
+  submission_id: lgbm_ecfp_ensemble_v3_no_bb3805
+  debug_max_train_rows:
+  debug_max_validation_rows:
+  debug_max_test_rows:
+
+features:
+  fp_size: 2048
+  radii: [2, 3]  # ECFP4 and ECFP6
+
+split:
+  scaffold_holdout_fraction: 0.20
+
+targets:
+  broad:
+    kind: classifier
+    include: broad_all
+    positive:
+      label_column: LABEL
+      label_value: 1
+  strict:
+    kind: classifier
+    include: strict_pos_and_broad_neg
+    positive:
+      min_count_pgk2: 10
+      max_count_ntc: 0
+      max_historic_hits: 5
+  orthosteric:
+    # Diagnostic/mechanism-flag model only -- NOT part of the submitted
+    # ensemble score (weight 0.0 below). See first_model_config.yaml's note.
+    kind: classifier
+    include: orthosteric_pos_and_broad_neg
+    positive:
+      min_count_pgk2: 3
+      max_count_pgk2_with_inhibitor: 0
+      max_count_ntc: 0
+      max_historic_hits: 5
+  zscore:
+    kind: regressor
+    include: broad_all
+    target_column: zscore_PGK2
+
+models:
+  classifier:
+    n_estimators: 900
+    learning_rate: 0.035
+    num_leaves: 63
+    max_depth: -1
+    min_child_samples: 40
+    subsample: 0.85
+    colsample_bytree: 0.75
+    reg_alpha: 0.1
+    reg_lambda: 1.0
+  regressor:
+    n_estimators: 700
+    learning_rate: 0.035
+    num_leaves: 63
+    max_depth: -1
+    min_child_samples: 40
+    subsample: 0.85
+    colsample_bytree: 0.75
+    reg_alpha: 0.1
+    reg_lambda: 1.0
+
+ensemble:
+  broad: 0.50
+  strict: 0.30
+  orthosteric: 0.0  # diagnostic only, see note on the target above
+  zscore: 0.20
+
+selection:
+  max_per_murcko_scaffold: 1
+  min_tanimoto_distance: 0.25  # keep candidates with Tanimoto similarity <= 0.75 to previous picks

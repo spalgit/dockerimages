@@ -51,8 +51,17 @@ cluster-stratified negative sampling).
 Usage:
     conda activate chemprop
     python chemprop_pgk2_broad.py
+
+    # BB3-805 ablation variant (see build_no_bb3805_variants.py and
+    # PGK2_VALIDATION_SUBMISSION_LOG.md, 2026-07-17): trains on
+    # PGK2_train_broad_{2to1,50to50}_no_bb3805.parquet instead, writing
+    # models to chemprop_models_no_bb3805/ and results to
+    # chemprop_variant_results_no_bb3805.csv, without touching the
+    # default-variant outputs.
+    python chemprop_pgk2_broad.py --suffix no_bb3805
 """
 
+import argparse
 import random
 from pathlib import Path
 
@@ -71,14 +80,6 @@ RDLogger.DisableLog("rdApp.*")
 
 # ── Paths ────────────────────────────────────────────────────────────────────
 HERE = Path(__file__).resolve().parent
-
-VARIANTS = {
-    "2to1": HERE / "PGK2_train_broad_2to1.parquet",
-    "50to50": HERE / "PGK2_train_broad_50to50.parquet",
-}
-
-MODEL_DIR = HERE / "chemprop_models"
-RESULTS_PATH = HERE / "chemprop_variant_results.csv"
 
 # ── ChemProp default/recommended architecture (Iqbal et al.) ──────────────────
 MP_DEPTH = 3
@@ -189,7 +190,7 @@ def train_one_seed(train_mols, train_labels, val_mols, val_labels, seed):
     return mpnn, val_preds
 
 
-def run_variant(name, path):
+def run_variant(name, path, model_dir):
     print(f"\n{'='*70}\nVariant: {name}  ({path.name})\n{'='*70}")
     mols, labels = load_variant(path)
     print(f"  Loaded {len(mols)} molecules  (positives={int(labels.sum())}, "
@@ -203,7 +204,7 @@ def run_variant(name, path):
     print(f"  Scaffold-balanced split: train={len(train_mols)} "
           f"(pos={int(train_labels.sum())}), val={len(val_mols)} (pos={int(val_labels.sum())})")
 
-    variant_dir = MODEL_DIR / name
+    variant_dir = model_dir / name
     variant_dir.mkdir(parents=True, exist_ok=True)
 
     ensemble_val_preds = []
@@ -224,18 +225,39 @@ def run_variant(name, path):
 
 
 def main():
-    MODEL_DIR.mkdir(parents=True, exist_ok=True)
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--suffix", default=None,
+        help="Optional variant suffix, e.g. 'no_bb3805' to train on "
+             "PGK2_train_broad_{2to1,50to50}_no_bb3805.parquet (built by "
+             "build_no_bb3805_variants.py) instead of the default files, "
+             "writing to chemprop_models_<suffix>/ and "
+             "chemprop_variant_results_<suffix>.csv so the default outputs "
+             "are never touched.",
+    )
+    args = parser.parse_args()
+    tag = f"_{args.suffix}" if args.suffix else ""
+
+    variants = {
+        "2to1": HERE / f"PGK2_train_broad_2to1{tag}.parquet",
+        "50to50": HERE / f"PGK2_train_broad_50to50{tag}.parquet",
+    }
+    model_dir = HERE / f"chemprop_models{tag}"
+    results_path = HERE / f"chemprop_variant_results{tag}.csv"
+
+    model_dir.mkdir(parents=True, exist_ok=True)
     all_results = []
-    for name, path in VARIANTS.items():
+    for name, path in variants.items():
         if not path.exists():
-            print(f"Skipping {name}: {path} not found (run build_train_variants.py first)")
+            builder = "build_no_bb3805_variants.py" if args.suffix else "build_train_variants.py"
+            print(f"Skipping {name}: {path} not found (run {builder} first)")
             continue
-        all_results.append(run_variant(name, path))
+        all_results.append(run_variant(name, path, model_dir))
 
     if all_results:
         df = pd.DataFrame(all_results)
-        df.to_csv(RESULTS_PATH, index=False)
-        print(f"\n{'='*70}\nSaved variant comparison to {RESULTS_PATH}\n{df.to_string(index=False)}")
+        df.to_csv(results_path, index=False)
+        print(f"\n{'='*70}\nSaved variant comparison to {results_path}\n{df.to_string(index=False)}")
 
 
 if __name__ == "__main__":
