@@ -4,6 +4,7 @@
 *.zip
 *.pkl
 *.h5
+*.sdf
 __pycache__/
 *.pyc
 .DS_Store

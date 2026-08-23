@@ -1,0 +1,6 @@
+cd ~/CYP_Oadmet_challenge_non_tdi
+mkdir -p data && cd data
+BASE=https://huggingface.co/datasets/openadmet/cyp-challenge-train-test/resolve/main
+curl -LO $BASE/cyp-challenge-TRAIN_inhibition.csv
+curl -LO $BASE/cyp-challenge-single-concentration-TRAIN.csv
+curl -LO $BASE/cyp-challenge-TEST-BLINDED.csv
