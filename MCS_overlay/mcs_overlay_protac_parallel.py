@@ -24,17 +24,27 @@ Usage (run inside the espsim conda environment):
       --warhead_smarts "..." [--e3_smarts "..."] [--nproc N] [options]
 
 All options from mcs_overlay_protac.py are supported, plus:
-  --nproc INT   Number of worker processes (default: all CPU cores).
-                --nproc 1 runs everything in a single process (useful for
-                debugging; output is byte-for-byte the same as parallel runs).
+  --nproc INT     Number of worker processes (default: all CPU cores).
+  --timeout SECS  Per-molecule wall-clock limit (default 20 s). A molecule that
+                  exceeds it is killed and skipped, and the run moves on to the
+                  next one. The limit covers the whole per-molecule job (MCS
+                  core, embedding / alignment, shape + ESP scoring), because
+                  RDKit spends that time inside C++ calls that cannot be
+                  interrupted cooperatively -- each molecule therefore runs in
+                  its own child process that can be terminated outright.
+                  --timeout 0 disables the limit and restores the plain
+                  Pool-based execution (with --nproc 1 running everything
+                  in-process, useful for debugging / profiling).
 """
 
 import argparse
 import contextlib
 import copy
 import io
+import multiprocessing as mp
 import os
 import sys
+import time
 
 from multiprocessing import Pool
 
@@ -225,6 +235,113 @@ def process_one(task):
 
 
 # ---------------------------------------------------------------------------
+# Timed execution: one killable child process per molecule
+# ---------------------------------------------------------------------------
+
+def _worker_entry(task, conn, init_args):
+    """
+    Child-process entry point: run one molecule and send the result back over
+    its private pipe. Under 'fork' the parent has already populated _G, so the
+    reference / SMARTS are inherited for free; under 'spawn' we initialise here.
+    """
+    try:
+        if not _G:
+            init_worker(*init_args)
+        conn.send(process_one(task))
+    except Exception as e:
+        index, _qmol, name = task
+        conn.send((index, name, f"[{index + 1}] {name}\n  Unexpected error: {e}. Skipping.\n", []))
+    finally:
+        conn.close()
+
+
+def run_timed(tasks, nproc, timeout, init_args, fh, total):
+    """
+    Run `tasks` with at most `nproc` molecules in flight, each in its own child
+    process. Any child still running after `timeout` seconds is terminated and
+    its molecule skipped. Results are written in input order, exactly like the
+    Pool.imap path.
+
+    Returns (n_written, n_timeout).
+    """
+    try:
+        ctx = mp.get_context('fork')
+        init_worker(*init_args)   # children inherit this; no per-molecule re-read
+    except ValueError:            # no fork() on this platform
+        ctx = mp.get_context('spawn')
+
+    pending = list(reversed(tasks))   # pop() from the end == input order
+    running = {}                      # index -> [proc, reader, start_time, task]
+    results = {}                      # index -> (log_text, blocks)
+    by_reader = {}                    # reader connection -> index
+
+    next_out = 0
+    n_done = 0
+    n_written = 0
+    n_timeout = 0
+
+    while next_out < total:
+        # --- launch as many molecules as the worker budget allows ---
+        while pending and len(running) < nproc:
+            task = pending.pop()
+            reader, writer = ctx.Pipe(duplex=False)
+            proc = ctx.Process(target=_worker_entry, args=(task, writer, init_args), daemon=True)
+            proc.start()
+            writer.close()   # so the reader sees EOF as soon as the child exits
+            running[task[0]] = [proc, reader, time.monotonic(), task]
+            by_reader[reader] = task[0]
+
+        # --- collect whatever is ready (short wait doubles as the timeout tick) ---
+        ready = mp.connection.wait(list(by_reader), timeout=0.1) if by_reader else []
+        for reader in ready:
+            index = by_reader.pop(reader)
+            proc, _reader, _t0, task = running.pop(index)
+            try:
+                _idx, _name, log_text, blocks = reader.recv()
+            except EOFError:   # child died without answering (segfault / OOM kill)
+                proc.join()
+                log_text = (f"[{index + 1}] {task[2]}\n"
+                            f"  Worker died (exit code {proc.exitcode}). Skipping.\n")
+                blocks = []
+            reader.close()
+            proc.join()
+            results[index] = (log_text, blocks)
+
+        # --- kill anything past its wall-clock budget ---
+        now = time.monotonic()
+        for index, (proc, reader, t0, task) in list(running.items()):
+            if now - t0 <= timeout:
+                continue
+            proc.terminate()
+            proc.join()
+            by_reader.pop(reader, None)
+            reader.close()
+            del running[index]
+            n_timeout += 1
+            results[index] = (
+                f"[{index + 1}] {task[2]}  ({task[1].GetNumAtoms()} heavy atoms)\n"
+                f"  Timed out after {timeout:g} s. Skipping.\n", [])
+
+        # --- emit completed molecules in input order ---
+        while next_out in results:
+            log_text, blocks = results.pop(next_out)
+            n_done += 1
+            n_written += write_result(fh, n_done, total, log_text, blocks)
+            next_out += 1
+
+    return n_written, n_timeout
+
+
+def write_result(fh, n_done, total, log_text, blocks):
+    """Print one molecule's captured log with a progress tag, write its records."""
+    body = log_text[log_text.find(']') + 2:] if log_text.startswith('[') else log_text
+    sys.stdout.write(f"\n[{n_done}/{total}] {body}")
+    for b in blocks:
+        fh.write(b)
+    return len(blocks)
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -261,6 +378,10 @@ def main():
                              '(not just best; ignored with --use_existing_3d)')
     parser.add_argument('--nproc', type=int, default=os.cpu_count(),
                         help='Number of worker processes (default: all CPU cores)')
+    parser.add_argument('--timeout', type=float, default=20.0,
+                        help='Per-molecule wall-clock limit in seconds (default 20). '
+                             'A molecule exceeding it is killed and skipped. '
+                             '0 disables the limit.')
     args = parser.parse_args()
 
     if args.warhead_smarts is None and args.e3_smarts is None:
@@ -301,38 +422,38 @@ def main():
     print(f"Queries   : {len(tasks)} molecules")
     print(f"Mode      : {mode}")
     print(f"Workers   : {nproc} process(es)")
+    print(f"Timeout   : {f'{args.timeout:g} s per molecule' if args.timeout > 0 else 'none'}")
 
     args_dict = vars(args).copy()
     init_args = (args.reference, args.warhead_smarts, args.e3_smarts, args_dict)
 
     n_written = 0
     n_done = 0
+    n_timeout = 0
     total = len(tasks)
 
     with open(args.output, 'w') as fh:
-        if nproc == 1:
+        if args.timeout > 0:
+            # One killable child process per molecule, <= nproc in flight.
+            n_written, n_timeout = run_timed(tasks, nproc, args.timeout, init_args, fh, total)
+        elif nproc == 1:
             # Single-process path (no pool) -- handy for debugging / profiling.
             init_worker(*init_args)
             for index, name, log_text, blocks in map(process_one, tasks):
                 n_done += 1
-                body = log_text[log_text.find(']') + 2:] if log_text.startswith('[') else log_text
-                sys.stdout.write(f"\n[{n_done}/{total}] {body}")
-                for b in blocks:
-                    fh.write(b)
-                    n_written += 1
+                n_written += write_result(fh, n_done, total, log_text, blocks)
         else:
             with Pool(processes=nproc, initializer=init_worker, initargs=init_args) as pool:
                 # imap keeps input order; chunksize=1 balances long/short molecules.
                 for index, name, log_text, blocks in pool.imap(process_one, tasks, chunksize=1):
                     n_done += 1
                     # Re-number the leading "[i]" tag to a "[done/total]" progress tag.
-                    body = log_text[log_text.find(']') + 2:] if log_text.startswith('[') else log_text
-                    sys.stdout.write(f"\n[{n_done}/{total}] {body}")
-                    for b in blocks:
-                        fh.write(b)
-                        n_written += 1
+                    n_written += write_result(fh, n_done, total, log_text, blocks)
 
-    print(f"\nDone. {n_written} record(s) from {total} molecule(s) -> {args.output}")
+    summary = f"\nDone. {n_written} record(s) from {total} molecule(s) -> {args.output}"
+    if n_timeout:
+        summary += f"  ({n_timeout} molecule(s) timed out after {args.timeout:g} s)"
+    print(summary)
 
 
 if __name__ == '__main__':
