@@ -12,11 +12,16 @@
 #
 # Each trunk writes to its own output directory. Completed members are cached, so
 # if a cap does bite, just re-run this script to finish the rest.
+#
+# Run it with `bash`, not `source`. Under SLURM (detected via $SLURM_JOB_ID) it
+# stays in the foreground, because a batch script that returns takes its children
+# down with it.
 set -euo pipefail
 
 H_SCRATCH="${1:-9}"
 H_CHEMELEON="${2:-15}"
 BASE="$HOME/dockerimages/CYP_Challenge/NON_TDI"
+SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
 SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/chemprop_nontdi_8task_ensemble.py"
 
 for f in cyp-challenge-TRAIN_direct_inhibition_with_single_shot_LABELLED.csv \
@@ -32,10 +37,34 @@ run () {                      # $1 = trunk, $2 = hours
         --data-dir "$BASE" --output-dir "$out" 2>&1 | tee -a "$out/run.log"
 }
 
-{
+main () {
     run scratch   "$H_SCRATCH"
     run chemeleon "$H_CHEMELEON"
     echo "=== both runs finished $(date) ==="
-} > "$BASE/overnight.log" 2>&1 &
+}
 
-echo "started pid $! -- tail -f $BASE/overnight.log"
+if [[ -n "${SLURM_JOB_ID:-}" ]]; then
+    # Under SLURM the batch script MUST stay in the foreground: when it exits,
+    # Slurm tears down the job step and kills every child. Tee so the output
+    # lands in both Slurm's .out file and the persistent log.
+    echo "SLURM job ${SLURM_JOB_ID} on $(hostname) -- running in foreground"
+    main 2>&1 | tee -a "$BASE/overnight.log"
+elif [[ -n "${CYP_FOREGROUND:-}" || -n "${CYP_DETACHED:-}" ]]; then
+    # Either the user asked for the foreground, or we ARE the detached copy.
+    main 2>&1 | tee -a "$BASE/overnight.log"
+else
+    # Detach properly. `&` alone is not enough: closing the terminal or dropping
+    # the SSH connection sends SIGHUP to the whole session. setsid puts the run in
+    # a new session with no controlling terminal, nohup ignores SIGHUP, and stdin
+    # is closed so it can never block waiting on a terminal that is gone.
+    mkdir -p "$BASE"
+    CYP_DETACHED=1 setsid nohup bash "$SELF" "$H_SCRATCH" "$H_CHEMELEON" \
+        > "$BASE/overnight.log" 2>&1 < /dev/null &
+    disown || true
+    sleep 1
+    echo "detached: pid $(pgrep -f "CYP_DETACHED|chemprop_nontdi_8task" | head -1 || echo "$!")"
+    echo "  log    : $BASE/overnight.log"
+    echo "  watch  : tail -f $BASE/overnight.log"
+    echo "  stop   : pkill -f chemprop_nontdi_8task_ensemble.py"
+    echo "You can close this terminal now."
+fi
