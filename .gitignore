@@ -1,6 +1,5 @@
 *.tsv
 *.gz
-*.tar.gz
 *.zip
 *.pkl
 *.h5
