@@ -108,6 +108,36 @@ FILE_TRAIN_PSEUDO = (
 # expectation is ~1.0. See PSEUDOLABEL_RUN_HOWTO.md section 5.
 D6_SD_ABORT = 0.5
 
+# The base script clips predictions to PRED_CLIP = (2.5, 9.0). That lower bound is
+# wrong for this run in two ways. Tier S labels the CYP2D6 non-inhibitors at 2.168,
+# and the real dose-response floors sit at 1.906-2.098, so 2.5 truncates a region the
+# model is actively trained on. Because the clip is applied per member *before* the
+# ensemble mean, the distortion spreads: at 2.5, 47% of CYP2D6 member cells were
+# pinned and 541 of 750 test compounds had at least one member truncated. The floor
+# must sit below the smallest label in the training table; 1.5 is the value
+# scripts_ext/place_predictions.py already uses for the same purpose.
+PRED_CLIP_LO = 1.5
+
+# ── 1/std (credible-band) sample weighting ────────────────────────────────────
+# Ported from chemprop_nontdi_8task_stderr_weighted.py, which was branched from the
+# base script on 2026-09-06 and so never received --train-file, --pred-clip-lo, the
+# provenance-split readout or the truncation gate. Bringing the weighting here rather
+# than porting six features the other way keeps one script on the tier-S path.
+#
+# `<iso>_..._std` is the credible-band width over a constant -- corr(width, std) is
+# 0.993-0.995 on all four isoforms and the median width/std ratio is 3.92 -- so 1/std
+# weighting *is* weighting by the leaderboard metric's tolerance band. Because
+# Spearman(pIC50, std) = -0.89 / -0.90 / -0.56 / -0.93, it shifts the effective
+# training distribution toward potent compounds, which is where the ST-RAE mass sits
+# (results doc section 1.9.2).
+WEIGHTED_ISOFORMS: tuple[str, ...] = ()   # default OFF: no weighting unless asked for
+STD_COL = "{iso}_pIC50_direct_inhibition_std"
+WEIGHT_CAP = 3.0               # winsorise to [1/cap, cap] AFTER normalising to mean 1
+STD_FLOOR = 0.02               # guards 1/std against a near-zero std only; below the
+                               # 1st percentile of 2C9 (0.039) and 3A4 (0.023) so that
+                               # WEIGHT_CAP is the single knob on the weight range
+MIXED_POLICY = "neutral"       # see std_weights()
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Splitters
@@ -199,6 +229,74 @@ def build_targets_pseudo(train: pd.DataFrame, aux_cols: list[str], aux_mode: str
         for j, iso in enumerate(ISOFORMS):
             lt[src[iso].to_numpy() == "pseudo", j] = False
     return y, lt
+
+
+def std_weights(train: pd.DataFrame, src: pd.DataFrame, weighted_isoforms,
+                cap: float, floor: float, mixed_policy: str):
+    """One scalar per molecule: geometric mean of 1/std over its weighted isoforms.
+
+    Normalised to mean 1 over the molecules it applies to, so the effective learning
+    rate is unchanged, then winsorised to [1/cap, cap] and re-normalised.
+
+    `mixed_policy` decides what to do with a molecule labelled on both a weighted and
+    an unweighted isoform, where chemprop's one-weight-per-datapoint model would other-
+    wise scale the unweighted isoform's label by a weight derived from another isoform:
+
+        neutral   only a *real* (drc) label on an unweighted isoform blocks weighting.
+                  Tier-S pseudo-labels are synthetic points already carrying their own
+                  --pseudo-weight, not measurements, so they do not block. THIS MATTERS:
+                  tier S fills 2,424 CYP2D6 cells, and counting those as blocking drops
+                  the weighted set from 2,427 molecules to 763 -- two thirds of the
+                  intervention silently lost. On the plain table, where no pseudo cell
+                  exists, this is identical to `strict`.
+        strict    any label on an unweighted isoform blocks (the stderr script's
+                  original rule; kept for reproducing that run).
+        weighted  nothing blocks; every eligible molecule carries its weight.
+    """
+    n = len(train)
+    w = np.ones(n, dtype=float)
+    weighted_isoforms = tuple(weighted_isoforms)
+    report = {"weighted_isoforms": list(weighted_isoforms), "n_weighted": 0,
+              "cap": cap, "std_floor": floor, "mixed_policy": mixed_policy}
+    if not weighted_isoforms:
+        return w, report
+
+    unweighted = [i for i in ISOFORMS if i not in weighted_isoforms]
+
+    # geometric mean of 1/std across the weighted isoforms this molecule is labelled on
+    log_acc = np.zeros(n)
+    cnt = np.zeros(n)
+    for i in weighted_isoforms:
+        std = pd.to_numeric(train.get(STD_COL.format(iso=i)),
+                            errors="coerce").to_numpy(dtype=float)
+        lab = train[f"{i}_pIC50_direct_inhibition"].notna().to_numpy()
+        ok = lab & np.isfinite(std)
+        log_acc[ok] += np.log(1.0 / np.maximum(std[ok], floor))
+        cnt[ok] += 1
+    raw = np.where(cnt > 0, np.exp(log_acc / np.maximum(cnt, 1)), np.nan)
+
+    blocked = np.zeros(n, dtype=bool)
+    if mixed_policy in ("neutral", "strict"):
+        for i in unweighted:
+            s_i = src[i].to_numpy()
+            blocked |= (s_i == "drc") if mixed_policy == "neutral" else (s_i != "")
+
+    apply = (cnt > 0) & ~blocked
+    report["n_eligible"] = int((cnt > 0).sum())
+    report["n_mixed_skipped"] = int(((cnt > 0) & blocked).sum())
+    if apply.sum() == 0:
+        return w, report
+
+    v = raw[apply]
+    v = v / v.mean()                      # preserve the effective learning rate
+    v = np.clip(v, 1.0 / cap, cap)
+    v = v / v.mean()                      # re-normalise after winsorising
+    w[apply] = v
+    report.update(n_weighted=int(apply.sum()), n_neutral=int((~apply).sum()),
+                  w_min=round(float(v.min()), 4), w_max=round(float(v.max()), 4),
+                  w_p10=round(float(np.quantile(v, .1)), 4),
+                  w_p90=round(float(np.quantile(v, .9)), 4))
+    return w, report
 
 
 def row_weights(train: pd.DataFrame, src: pd.DataFrame,
@@ -326,6 +424,22 @@ def main() -> int:
                          "'none' disables censoring everywhere")
     ap.add_argument("--pseudo-weight", type=float, default=1.0,
                     help="multiplier on the per-row weight of pseudo cells")
+    ap.add_argument("--weighted-isoforms", default=",".join(WEIGHTED_ISOFORMS),
+                    help="comma-separated isoforms to weight by 1/std, i.e. by the "
+                         "inverse credible-band width. Empty (the default) = no "
+                         "weighting, identical to before. Recommended first run: "
+                         "CYP2C9,CYP3A4")
+    ap.add_argument("--weight-cap", type=float, default=WEIGHT_CAP,
+                    help="winsorise weights to [1/cap, cap] after mean-1 normalising "
+                         f"(default {WEIGHT_CAP})")
+    ap.add_argument("--std-floor", type=float, default=STD_FLOOR,
+                    help=f"floor on std before inverting (default {STD_FLOOR})")
+    ap.add_argument("--mixed-policy", choices=("neutral", "strict", "weighted"),
+                    default=MIXED_POLICY,
+                    help="molecules labelled on both a weighted and an unweighted "
+                         "isoform: 'neutral' = only a real (drc) label blocks, "
+                         "'strict' = any label blocks, 'weighted' = nothing blocks. "
+                         "See std_weights()")
     ap.add_argument("--aux-mode", choices=("log2fc", "is_hit"), default=base.AUX_MODE)
     ap.add_argument("--trunk", choices=("scratch", "chemeleon"), default="scratch")
     ap.add_argument("--seeds", type=int, nargs="+", default=list(base.SEEDS))
@@ -336,6 +450,10 @@ def main() -> int:
     ap.add_argument("--batch-size", type=int, default=base.BATCH_SIZE)
     ap.add_argument("--max-hours", type=float, default=None)
     ap.add_argument("--smoke", action="store_true")
+    ap.add_argument("--pred-clip-lo", type=float, default=PRED_CLIP_LO,
+                    help="lower bound predictions are clipped to. Must sit below the "
+                         "smallest training label; the base script's 2.5 does not "
+                         "(tier S labels are at 2.168)")
     args = ap.parse_args()
 
     if args.smoke:
@@ -377,6 +495,13 @@ def main() -> int:
     if any(m is None for m in mols_te):
         raise SystemExit("unparseable SMILES in the test file")
 
+    weighted_isoforms = tuple(i.strip() for i in args.weighted_isoforms.split(",")
+                              if i.strip())
+    bad = [i for i in weighted_isoforms if i not in ISOFORMS]
+    if bad:
+        raise SystemExit(f"--weighted-isoforms: unknown isoform(s) {bad}; "
+                         f"choose from {list(ISOFORMS)}")
+
     src = source_frame(train)
     n_pseudo = int((src == "pseudo").to_numpy().sum())
     if n_pseudo == 0:
@@ -387,6 +512,10 @@ def main() -> int:
     y_all, lt_all = build_targets_pseudo(train, aux_cols, args.aux_mode, src,
                                          args.censor)
     w_all = row_weights(train, src, args.pseudo_weight)
+    w_std, w_report = std_weights(train, src, weighted_isoforms,
+                                  args.weight_cap, args.std_floor,
+                                  args.mixed_policy)
+    w_all = w_all * w_std
 
     print(f"  train {len(train)} compounds, test {len(test)}")
     print(f"  {'task':<42s} {'drc':>6s} {'pseudo':>7s} {'censored':>9s}  "
@@ -400,6 +529,24 @@ def main() -> int:
     for j, c in enumerate(aux_cols):
         print(f"  {c:<42s} {int(np.isfinite(y_all[:, N_ISO+j]).sum()):6d} "
               f"{'-':>7s} {'-':>9s}")
+    if weighted_isoforms:
+        print(f"\n  1/std weighting on {','.join(weighted_isoforms)} "
+              f"(cap {args.weight_cap}, floor {args.std_floor}, "
+              f"mixed-policy {args.mixed_policy}):")
+        print(f"    {w_report['n_weighted']} of {w_report['n_eligible']} eligible "
+              f"molecules weighted, {w_report['n_mixed_skipped']} skipped as mixed")
+        if w_report["n_weighted"]:
+            print(f"    weight range {w_report['w_min']:.3f}-{w_report['w_max']:.3f} "
+                  f"(p10 {w_report['w_p10']:.3f}, p90 {w_report['w_p90']:.3f})")
+        if (w_report["n_eligible"] and
+                w_report["n_weighted"] / w_report["n_eligible"] < 0.5):
+            print("    WARNING: fewer than half the eligible molecules are actually "
+                  "weighted.\n             On a pseudo-label table this usually means "
+                  "--mixed-policy strict\n             is counting pseudo cells as "
+                  "blocking. See std_weights().")
+    else:
+        print("\n  1/std weighting OFF (--weighted-isoforms is empty)")
+
     if args.censor == "all" and n_pseudo:
         print("\n  !! --censor all marks pseudo-labels as left-censored. This is the "
               "\n     configuration that collapses the CYP2D6 head. Diagnosis only.\n")
@@ -446,13 +593,14 @@ def main() -> int:
             mols_te, xd_te, ffn_dim, sd, args.epochs, out / "logs", args.trunk,
             args.batch_size, args.censor)
 
-        pred_te = np.clip(pred_te[:, :N_ISO], *PRED_CLIP)
+        pred_te = np.clip(pred_te[:, :N_ISO], args.pred_clip_lo, PRED_CLIP[1])
         np.save(f_te, pred_te)
         va = pd.DataFrame({ID_COL: train.iloc[va_idx][ID_COL].to_numpy(),
                            "split": sp, "seed": sd})
         for j, iso in enumerate(ISOFORMS):
             va[f"{iso}_true"] = y_all[va_idx, j]
-            va[f"{iso}_pred"] = np.clip(pred_va[:, j], *PRED_CLIP)
+            va[f"{iso}_pred"] = np.clip(pred_va[:, j], args.pred_clip_lo,
+                                        PRED_CLIP[1])
             va[f"{iso}_source"] = src[iso].to_numpy()[va_idx]
         va.to_csv(f_va, index=False)
         test_preds.append(pred_te)
@@ -504,12 +652,18 @@ def main() -> int:
     meta = dict(n_members=len(test_preds), members=[f"{s}_seed{d}" for s, d in members],
                 train_file=args.train_file, censor=args.censor,
                 pseudo_weight=args.pseudo_weight, n_pseudo_cells=n_pseudo,
+                stderr_weighting=w_report,
                 trunk=args.trunk, aux_mode=args.aux_mode, epochs=args.epochs,
                 batch_size=args.batch_size,
                 ffn_hidden_dims=list(base.FFN_HIDDEN_DIMS),
                 mp_hidden_dim=base.MP_HIDDEN_DIM, mp_depth=base.MP_DEPTH,
                 ffn_n_layers=base.FFN_N_LAYERS, dropout=base.DROPOUT,
                 smiles_column=SMILES_COL, rdkit2d=bool(xd_all is not None),
+                pred_clip=[args.pred_clip_lo, PRED_CLIP[1]],
+                pct_member_cells_at_floor={
+                    i: round(float((np.stack(test_preds)[:, :, j]
+                                    <= args.pred_clip_lo + 1e-4).mean() * 100), 2)
+                    for j, i in enumerate(ISOFORMS)},
                 aux_task_weight=base.AUX_TASK_WEIGHT,
                 pred_sd={i: round(float(P[:, j].std()), 4)
                          for j, i in enumerate(ISOFORMS)},
@@ -524,6 +678,21 @@ def main() -> int:
     for j, iso in enumerate(ISOFORMS):
         print(f"  {iso}: {P[:, j].mean():.3f} +- {P[:, j].std():.3f}   "
               f"member disagreement sd {spread[j]:.3f}")
+
+    # Truncation diagnostic. The clip runs per member, before the mean, so a floor
+    # that bites distorts far more of the ensemble column than the column's own
+    # count of floored values suggests. Anything but ~0% here means --pred-clip-lo
+    # is sitting inside the trained range.
+    S = np.stack(test_preds)
+    print("\npredictions at the clip floor "
+          f"({args.pred_clip_lo:.2f}), member-level cells:")
+    for j, iso in enumerate(ISOFORMS):
+        at = int((S[:, :, j] <= args.pred_clip_lo + 1e-4).sum())
+        anyc = int((S[:, :, j] <= args.pred_clip_lo + 1e-4).any(axis=0).sum())
+        flag = "  <-- truncating" if at / S[:, :, j].size > 0.02 else ""
+        print(f"  {iso}: {at:6d}/{S[:, :, j].size} "
+              f"({100 * at / S[:, :, j].size:5.1f}%), "
+              f"{anyc}/{len(test)} compounds affected{flag}")
 
     d6 = float(P[:, ISOFORMS.index("CYP2D6")].std())
     print()
