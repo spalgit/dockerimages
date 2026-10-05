@@ -1,0 +1,11 @@
+# Never commit credentials or CDD data.
+.env
+sar.env
+*.env
+!.env.example
+*.csv
+*.xlsx
+*.meta.json
+data/
+__pycache__/
+*.pyc

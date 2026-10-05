@@ -1,0 +1,9 @@
+# PROTAC SAR matrix web service — tested with Python 3.12
+dash==4.1.0
+pandas==3.0.2
+numpy==2.4.4
+openpyxl==3.1.5
+rdkit==2026.3.1
+requests==2.33.1
+cdd_python_sdk==1.0.6
+gunicorn==23.0.0

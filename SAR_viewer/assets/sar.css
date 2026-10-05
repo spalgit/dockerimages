@@ -1,0 +1,274 @@
+:root {
+  --bg: #f6f7f8;
+  --panel: #ffffff;
+  --line: #dfe3e6;
+  --ink: #16232b;
+  --muted: #6b7a85;
+  --accent: #0d7c80;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: "Inter", "Segoe UI", system-ui, -apple-system, sans-serif;
+}
+
+.page { padding: 20px 24px 60px; }
+
+.header h1 {
+  margin: 0;
+  font-size: 22px;
+  letter-spacing: -0.01em;
+}
+.subtitle { margin: 4px 0 16px; color: var(--muted); font-size: 13px; }
+
+/* ---- controls ---- */
+.controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: flex-end;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 14px 16px;
+  margin-bottom: 18px;
+}
+.ctrl { min-width: 170px; flex: 0 1 auto; }
+.ctrl.wide { min-width: 280px; }
+.ctrl label {
+  display: block;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  margin-bottom: 5px;
+}
+.radio label { display: inline-block; margin-right: 12px; font-size: 12px;
+  font-weight: 400; letter-spacing: 0; color: var(--ink); }
+.radio input { margin-right: 4px; }
+
+.btn-wrap { align-self: flex-end; }
+.btn {
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  padding: 9px 16px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.btn:hover { filter: brightness(1.08); }
+
+.status { margin-top: 12px; font-size: 12px; color: var(--muted); }
+.empty {
+  padding: 40px;
+  text-align: center;
+  color: var(--muted);
+  background: var(--panel);
+  border: 1px dashed var(--line);
+  border-radius: 10px;
+}
+
+/* ---- matrix ---- */
+.table-scroll {
+  overflow: auto;
+  max-height: 78vh;
+  width: fit-content;
+  max-width: 100%;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+.sar-table {
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 12px;
+}
+.sar-table th, .sar-table td {
+  border-right: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  padding: 4px 6px;
+  text-align: center;
+  background: var(--panel);
+}
+
+/* sticky header rows (row-2 `top` is set inline from the image height) */
+.sar-table thead th { position: sticky; top: 0; z-index: 3; }
+
+/* sticky first two columns (`left` is set inline from the image width) */
+.poi-cell, .poi-name { position: sticky; z-index: 2; }
+.poi-cell { left: 0; }
+.poi-name { font-weight: 600; white-space: nowrap; }
+.poi-score { font-size: 10.5px; font-weight: 500; color: var(--muted); margin-top: 2px; }
+.corner { z-index: 5; }
+.corner:first-child { left: 0; }
+.value-name {
+  max-width: 150px;
+  font-size: 11px;
+  color: var(--muted);
+  font-weight: 600;
+  white-space: normal;
+}
+
+.e3-head { vertical-align: bottom; }
+.conc-head {
+  font-weight: 600;
+  color: var(--muted);
+  background: #f0f3f4;
+  white-space: nowrap;
+  min-width: 76px;
+}
+
+.struct-img { display: block; margin: 0 auto; }
+.struct-label {
+  font-weight: 600;
+  font-size: 12px;
+  padding-top: 2px;
+  color: var(--ink);
+}
+.struct-missing {
+  color: var(--muted);
+  font-style: italic;
+  padding: 24px 8px;
+  font-size: 11px;
+}
+.e3-struct, .poi-struct { padding: 4px; }
+
+.val-cell { font-variant-numeric: tabular-nums; min-width: 76px; }
+/* replicate count under each median; inherits the cell's colour so it stays
+   readable on both the pale and the saturated end of the scale */
+.val-n {
+  font-size: 10px;
+  font-weight: 500;
+  opacity: 0.65;
+  line-height: 1.2;
+}
+
+/* sort controls sit in the same bar; the concentration picker is narrow */
+.ctrl.narrow { min-width: 130px; }
+
+/* ---- CDD data bar (sar_app_cdd.py) ---- */
+.data-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.btn.secondary {
+  background: var(--panel);
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  padding: 7px 14px;
+  font-size: 12px;
+}
+.data-note { font-size: 12px; color: var(--muted); }
+
+/* ---- dose-response curve on hover (assets/sar_hover.js) ---- */
+/* Each curve is rendered once into this gallery; the panel below borrows the
+   src. Kept in the DOM (not display:none on the images) so the browser has
+   them decoded before the first hover and the panel opens without a flash. */
+#curve-gallery {
+  position: absolute;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.val-cell.has-curve { cursor: crosshair; }
+.val-cell.has-curve:hover,
+.val-cell.has-curve:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.curve-pop {
+  position: fixed;
+  z-index: 40;
+  display: none;
+  padding: 6px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(22, 35, 43, 0.16);
+  pointer-events: none;
+}
+.curve-pop.is-open { display: block; }
+.curve-pop img { display: block; border-radius: 6px; }
+
+
+.curve-pop-row { display: flex; gap: 10px; }
+.curve-pop-title { font-size: 12.5px; font-weight: 700; color: var(--ink); padding: 2px 4px 4px; }
+.curve-pop-caption { font-size: 10.5px; color: var(--muted); padding: 4px 4px 3px; }
+
+/* per-run values under a cell's median, newest first */
+.val-median { font-weight: 700; }
+.run-list {
+  margin-top: 4px;
+  padding-top: 3px;
+  border-top: 1px solid currentColor;
+  border-top-color: rgba(127, 127, 127, 0.35);
+  font-size: 10.5px;
+  line-height: 1.35;
+  font-weight: 500;
+  text-align: left;
+}
+.run-line { display: flex; justify-content: space-between; gap: 8px; white-space: nowrap; }
+.run-date { opacity: 0.7; font-variant-numeric: tabular-nums; }
+.run-more { opacity: 0.7; font-style: italic; cursor: help; }
+.run-line.hook { opacity: 0.6; text-decoration: line-through; cursor: help; }
+
+/* ---- compact header (sar_app_cdd.py): title + CDD refresh live inside the
+   controls bar, so the matrix gets the rest of the window ---- */
+.page.compact { padding: 8px 14px 16px; }
+.controls.compact {
+  gap: 8px 12px;
+  padding: 8px 12px;
+  margin-bottom: 8px;
+}
+.controls.compact .ctrl label { margin-bottom: 3px; }
+.title-block {
+  max-width: 300px;
+  padding-right: 12px;
+  margin-right: 2px;
+  border-right: 1px solid var(--line);
+  align-self: stretch;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 4px;
+}
+.title-block h1 {
+  margin: 0;
+  font-size: 17px;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+}
+.title-data { display: flex; align-items: center; gap: 8px; }
+.title-data .btn.secondary { padding: 4px 9px; font-size: 11px; white-space: nowrap; }
+.title-data .data-note { font-size: 10.5px; line-height: 1.25; }
+.page.compact .status { margin-top: 6px; }
+
+/* ---- find a compound pair (assets/sar_find.js) ---- */
+.ctrl.find { min-width: 0; }
+.find-row { display: flex; gap: 6px; align-items: center; }
+.find-input {
+  width: 108px;
+  height: 34px;
+  box-sizing: border-box;
+  padding: 0 8px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  font-size: 13px;
+}
+.find-input:focus { outline: none; border-color: var(--accent); }
+.btn.find-btn { padding: 8px 12px; }
+.find-msg { font-size: 10.5px; color: var(--muted); min-height: 13px; margin-top: 2px; }
+/* the pair found: a ring on the cell(s), its row name and column header tinted */
+.sar-table td.find-hit { box-shadow: inset 0 0 0 3px #e8890c; }
+.sar-table .find-line { background: #fde9cc !important; }
+.sar-table .find-flash { animation: find-flash 0.5s ease-in-out 3; }
+@keyframes find-flash { 50% { box-shadow: inset 0 0 0 5px #e8890c; } }
