@@ -51,6 +51,18 @@ gcloud compute instances create vm-gpu \
   --boot-disk-type=pd-ssd
 
 
+ gcloud compute instances create vm-sar_viewer \
+  --zone=us-central1-a \
+  --machine-type=e2-standard-2 \
+  --image-family=ubuntu-2204-lts \
+  --image-project=ubuntu-os-cloud \
+  --network=cheminfosolutions-cluster-vpc-net \
+  --subnet=cheminfosolutions-cluster-vpc-primary-subnet \
+  --scopes=https://www.googleapis.com/auth/cloud-platform \
+  --boot-disk-size=10GB \
+  --boot-disk-type=pd-ssd
+
+
 gcloud compute instances create vm-gpu \
   --zone=us-central1-a \
   --machine-type=n1-standard-2 \
