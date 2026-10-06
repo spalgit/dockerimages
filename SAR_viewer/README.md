@@ -32,7 +32,9 @@ SSH tunnel or Tailscale (see below).
 | `Dockerfile`, `.dockerignore`, `requirements.txt` | Container image |
 | `.env.example` | Template for the credentials file (never commit the real one) |
 | `RUN_ON_GCP_VM.md` | Build, run, restart and update on a GCP VM |
+| `INSTALL_TAILSCALE_VM.md` | Install Tailscale on the VM and give colleagues access |
 | `TAILSCALE_ACCESS.md` | Giving colleagues private access with Tailscale |
+| `TAILSCALE_USER_APPROVAL.md` | Approving a new user in the ChiaraBio tailnet (separate from Microsoft 365) |
 | `DEPLOY.md` | Production (AWS) deployment and security requirements |
 
 ## Security
