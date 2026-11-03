@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>OpenADMET CYP Challenge — TDI Track Model Report (short)</title>
+<link rel="stylesheet" href="report.css">
+<style>
+/* Short-report overrides: same house style, compressed. */
+@page { margin: 14mm 15mm 13mm 15mm;
+  @bottom-center { content: counter(page) " / " counter(pages);
+    font-family: "DejaVu Sans", sans-serif; font-size: 7.5pt; color: #666; } }
+body { font-size: 8.8pt; line-height: 1.32; }
+h1 { font-size: 13.5pt; }
+h2 { font-size: 10.2pt; margin: 0.9em 0 0.35em 0; padding-top: 0.5em;
+     page-break-after: avoid; }
+p { margin: 0.35em 0; }
+table { font-size: 7.3pt; margin: 0.45em 0; table-layout: fixed; }
+th, td { padding: 2.4px 4px; word-wrap: break-word; hyphens: auto; }
+tr { page-break-inside: avoid; }
+code { hyphens: none; -webkit-hyphens: none; }
+.meta { margin: 0.5em 0 0 0; font-size: 8.4pt; }
+.meta p { margin: 0.12em 0; }
+</style>
+</head>
+<body>
+
+<h1>OpenADMET CYP Challenge — Time-Dependent Inhibition Track<br>Model Description Report</h1>
+
+<div class="meta">
+<p><b>Submitted by:</b> Cheminfosolutions Ltd &nbsp;·&nbsp; <b>leaderboard alias:</b> Cheminfo</p>
+<p><b>Predicted properties:</b> <code>CYP3A4_is_TDI</code>, <code>CYP2D6_is_TDI</code>;
+blind set 750 compounds, training set 6,145 compounds</p>
+<p><b>Metric:</b> Matthews correlation coefficient (MCC)</p>
+<p><b>Training data:</b> challenge-distributed data only; no external TDI corpus was merged into
+any submitted column</p>
+</div>
+
+<h2 class="first">1. Models</h2>
+
+<p>Models were built per isoform: CYP2D6 and CYP3A4 are independent runs with their own
+hyperparameters, blend weight and decision threshold. Selection was on MCC under Bemis–Murcko
+scaffold splits.</p>
+
+<table>
+<colgroup>
+<col style="width:15%"><col style="width:27%"><col style="width:26%"><col style="width:22%"><col style="width:10%">
+</colgroup>
+<thead>
+<tr><th>Arm</th><th>Model / architecture</th><th>Molecular representation</th><th>Reference</th><th>In final file</th></tr>
+</thead>
+<tbody>
+<tr>
+<td><b>ChemProp</b></td>
+<td>Multitask binary D-MPNN, Optuna-TPE tuned (depth, message/FFN widths, dropout, LR schedule,
+aggregation, auxiliary-head weight)</td>
+<td>Learned bond-message graph embedding <b>+</b> RDKit 2D physicochemical descriptor block</td>
+<td>Heid et al., <i>J. Chem. Inf. Model.</i> <b>2024</b>, 64, 9–17; Yang et al., <i>ibid.</i>
+<b>2019</b>, 59, 3370–3388</td>
+<td>Yes</td>
+</tr>
+<tr>
+<td><b>LightGBM</b></td>
+<td>Gradient-boosted trees; tree count and decision threshold tuned on MCC</td>
+<td>RDKit descriptors + Morgan (ECFP) counts + FCFP counts + MACCS keys + mechanism-based
+inactivation (MBI) alert counts</td>
+<td>Ke et al., <i>NeurIPS</i> <b>2017</b>, 3146–3154</td>
+<td>Yes (CYP3A4)</td>
+</tr>
+<tr>
+<td><b>Published-protocol grid</b></td>
+<td>kNN (Jaccard), Random Forest, SVM (RBF), ANN/MLP and a graph-convolution arm, crossed with
+3 sampling strategies (original / ROS / RUS) and 10 fingerprints; 5-fold with per-fold tuning.
+Reproduced on the paper's 7,914-compound CYP3A4 set, then retrained on the challenge labels; the
+submitted column uses only the retrained form</td>
+<td>PaDEL fingerprints: AP2D (780), CDK (1024), CDKExt (1024), EState (79), GraphFP (1024),
+MACCS (166), KRFP (4860), PubChemFP (881), SubFP (307)</td>
+<td>Xu, Lu, Wu, Gui, Liu, Tang &amp; Li, <i>Mol. Pharmaceutics</i> <b>2023</b>, 20, 194–205
+(doi:10.1021/acs.molpharmaceut.2c00571)</td>
+<td>Yes</td>
+</tr>
+<tr>
+<td>ChemProp, CheMeleon trunk</td>
+<td>Same D-MPNN initialised from descriptor-pretrained foundation weights</td>
+<td>as ChemProp</td>
+<td>CheMeleon foundation weights distributed with ChemProp v2</td>
+<td>No</td>
+</tr>
+<tr>
+<td>XGBoost</td>
+<td>Companion boosting arm on the same feature block as LightGBM</td>
+<td>as LightGBM</td>
+<td>Chen &amp; Guestrin, <i>KDD</i> <b>2016</b>, 785–794</td>
+<td>No</td>
+</tr>
+<tr>
+<td>External-label auxiliary head</td>
+<td>Multitask classifier with an auxiliary head on a published deep-learning TDI /
+experimental-variability set</td>
+<td>as ChemProp</td>
+<td>Fluetsch &amp; Trunzer, <i>Chem. Res. Toxicol.</i> <b>2024</b>, 37, 549</td>
+<td>No</td>
+</tr>
+<tr>
+<td>Size controls</td>
+<td>Heavy-atom count and molecular weight as single-feature rankers</td>
+<td>—</td>
+<td>internal controls</td>
+<td>No</td>
+</tr>
+</tbody>
+</table>
+
+<p><b>Descriptors.</b> The in-house arms use the RDKit 2D physicochemical block (~200
+descriptors) concatenated with count-based Morgan and FCFP fingerprints, MACCS keys and a
+hand-curated MBI structural-alert count vector; non-finite columns and columns exceeding 1E10
+are dropped before fitting. The published-protocol grid uses PaDEL fingerprints exactly as
+published. Software: ChemProp, LightGBM, XGBoost, RDKit (Landrum, rdkit.org), PaDEL (Yap,
+<i>J. Comput. Chem.</i> <b>2011</b>, 32, 1466–1474), scikit-learn (Pedregosa et al., <i>JMLR</i>
+<b>2011</b>, 12, 2825–2830) and Optuna (Akiba et al., <i>KDD</i> <b>2019</b>, 2623–2631).</p>
+
+<p><b>Submitted configuration.</b></p>
+
+<table>
+<colgroup><col style="width:14%"><col style="width:32%"><col style="width:34%"><col style="width:20%"></colgroup>
+<thead>
+<tr><th>Endpoint</th><th>Ranking</th><th>Filter</th><th>Positive calls / 750</th></tr>
+</thead>
+<tbody>
+<tr><td>CYP3A4</td><td>Rank average 0.6·rank(ChemProp) + 0.4·rank(LightGBM); weight read at its
+MCC maximum on a 0→1 sweep</td>
+<td rowspan="2">Intersected with the published-protocol ranking, keeping compounds above the
+median of both; call count set at the MCC-optimal call rate implied by each endpoint's test
+AUC</td><td>194</td></tr>
+<tr><td>CYP2D6</td><td>ChemProp ranking alone</td><td>54</td></tr>
+</tbody>
+</table>
+
+<h2>2. Results</h2>
+
+<table>
+<colgroup><col style="width:28%"><col style="width:18%"><col style="width:18%"><col style="width:18%"><col style="width:18%"></colgroup>
+<thead>
+<tr><th>Endpoint</th><th>MCC</th><th>Accuracy</th><th>Precision</th><th>Recall</th></tr>
+</thead>
+<tbody>
+<tr><td>CYP2D6_is_TDI</td><td><b>0.3895</b></td><td>0.9153</td><td>0.4127</td><td>0.4625</td></tr>
+<tr><td>CYP3A4_is_TDI</td><td><b>0.4578</b></td><td>0.7779</td><td>0.6227</td><td>0.6049</td></tr>
+<tr><td>Macro-average</td><td><b>0.4237</b></td><td>—</td><td>—</td><td>—</td></tr>
+</tbody>
+</table>
+
+<p>Board read 2026-11-01; 750 rows, validated with the challenge's own submission validator.</p>
+
+<h2>3. Ligand preparation and labels</h2>
+
+<p><b>Ligand preparation</b>, applied identically to the training and blind sets. The six RDKit
+corrections run in the order shown, through a single driver.</p>
+
+<table>
+<colgroup><col style="width:6%"><col style="width:30%"><col style="width:64%"></colgroup>
+<thead><tr><th>#</th><th>Step</th><th>Detail</th></tr></thead>
+<tbody>
+<tr><td>0</td><td>Schrödinger LigPrep</td><td>Desalting, neutralisation, tautomer and ionisation
+enumeration at pH 7.4</td></tr>
+<tr><td>1</td><td>Sulfonamide N</td><td>R-SO<sub>2</sub>-[N<sup>−</sup>]-R′ → R-SO<sub>2</sub>-NH-R′</td></tr>
+<tr><td>2</td><td>Pyridinium N</td><td>[nH<sup>+</sup>] → n; quaternary [n<sup>+</sup>] left unchanged</td></tr>
+<tr><td>3</td><td>Morpholine N</td><td>[NH<sup>+</sup>] → N</td></tr>
+<tr><td>4</td><td>Iminium N</td><td>Amidine / guanidine / iminium C=[NH<sup>+</sup>] → C=N, sp<sup>2</sup> nitrogen only</td></tr>
+<tr><td>5</td><td>Amide</td><td><code>N=C([O-])</code> → <code>NC(=O)</code>, bond orders corrected</td></tr>
+<tr><td>6</td><td>Phenol</td><td><code>c[O-]</code> → <code>cOH</code></td></tr>
+<tr><td>7</td><td>Artefact fallback</td><td>Unrepairable LigPrep artefacts revert to the raw
+input SMILES; raw, LigPrep and cleaned SMILES retained side by side, so the step is idempotent.
+Charged species 19.2% → 14.6%</td></tr>
+<tr><td>8</td><td>Featuriser</td><td>Largest fragment selected, then RDKit <code>Uncharger</code>:
+graph and descriptor block are computed on neutral structures</td></tr>
+</tbody>
+</table>
+
+<p><b>Label interpretation.</b> <code>is_TDI</code> is a deterministic function of two measured
+potency surfaces, verified to reproduce the published label on every training row carrying
+both.</p>
+
+<table>
+<colgroup><col style="width:24%"><col style="width:76%"></colgroup>
+<tbody>
+<tr><th>Definition</th><td><code>is_TDI ⟺ max(pIC50_TDI_condition, 4.0) − max(pIC50_direct, 4.0)
+&gt; log10(2)</code></td></tr>
+<tr><th>Negative class</th><td>Any compound whose shifted curve never clears 4.301, so part of
+the class is compounds whose potency was never established rather than demonstrated
+non-inhibitors — 34.8% of the CYP3A4 negatives</td></tr>
+<tr><th>Censoring</th><td>Left-censored potency rows treated as upper bounds, not as points</td></tr>
+<tr><th>CYP2D6 coverage</th><td>No labelled compound in the saturated zone of the single-shot
+screen (curves were run only on pre-flagged compounds); that region filled with pseudo-negatives
+derived from the isoforms with data there, contamination 1 positive in 836 zone compounds</td></tr>
+</tbody>
+</table>
+
+</body>
+</html>

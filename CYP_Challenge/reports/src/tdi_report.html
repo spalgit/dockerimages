@@ -1,0 +1,254 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>OpenADMET CYP Challenge — TDI Track Model Report</title>
+<link rel="stylesheet" href="report.css">
+</head>
+<body>
+
+<h1>OpenADMET CYP Challenge — Time-Dependent Inhibition Track<br>Model Description Report</h1>
+
+<div class="meta">
+<p><b>Team / leaderboard alias:</b> Cheminfo</p>
+<p><b>Predicted properties:</b> <code>CYP3A4_is_TDI</code>, <code>CYP2D6_is_TDI</code></p>
+<p><b>Training data:</b> challenge-distributed data only; no external TDI corpus was merged</p>
+</div>
+
+<h2 class="first">1. Reformulating the problem: we do not classify the label</h2>
+
+<p>The central design decision, from which every architectural choice below follows, is that
+<b>we never train a classifier on <code>is_TDI</code></b>. The published label is not an
+annotation to be learned — it is a deterministic function of two measured potency surfaces:</p>
+
+<pre>is_TDI  ==  max(pIC50_TDI_condition, floor) - max(pIC50_direct_inhibition, floor)  >  log10(2)</pre>
+
+<p>We verified that this rule reproduces the published label exactly on every training row
+carrying both surfaces. Treating the problem as binary classification therefore throws away two
+things the data actually contains.</p>
+
+<p><b>First, it discards distance from the decision boundary.</b> The floored shift is a
+continuous, physically meaningful quantity — the degree to which pre-incubation potentiates
+inhibition — defined wherever both surfaces exist. A compound that shifts just below the
+two-fold cut and one that does not shift at all are indistinguishable to a classifier and
+entirely different to a regressor. Our primary heads therefore <b>regress the floored shift</b>
+and the binary call is recovered by applying the challenge's own threshold to the regressed
+value. The gain from this reformulation, rather than from any choice of learner, is the single
+largest improvement we obtained on CYP2D6.</p>
+
+<p><b>Second, it hides that the CYP3A4 label is a conjunction.</b> A substantial block of CYP3A4
+rows have a fitted TDI-condition curve but no fitted direct-inhibition curve, and the organisers'
+convention assigns every one of them a negative label regardless of chemistry. Whether a direct
+curve could be fitted at all is thus a constituent of the label, not a missing-data nuisance.
+We model it explicitly, as described in Section 4.</p>
+
+<h2>2. Architecture A — multitask directed message-passing network</h2>
+
+<p>The first family is a directed message-passing neural network (D-MPNN) operating on the
+molecular graph, with a shared trunk and multiple output heads.</p>
+
+<p><b>Representation.</b> Messages are passed along directed bonds for several rounds and
+aggregated to a learned graph-level embedding. That embedding is concatenated with a block of
+computed two-dimensional physicochemical descriptors before the feed-forward head. The
+concatenation matters for this endpoint: bioactivation propensity depends on global molecular
+properties — lipophilicity, polar surface, charge distribution — that a bond-level message
+passing scheme reconstructs only indirectly, while a hashed substructure representation
+dilutes them. Descriptors that are degenerate or numerically unstable across the training set
+are removed, and the retained block is standardised and clipped so that a handful of extreme
+values cannot dominate the shared trunk.</p>
+
+<p><b>Multitask structure.</b> Both scored isoforms are learned jointly on one trunk, with
+additional auxiliary heads predicting whether each isoform's potency crosses the activity
+threshold implied by the label definition. The auxiliary heads carry reduced loss weight. Their
+purpose is regularisation of the shared representation rather than prediction: they force the
+trunk to encode absolute potency, which the shift alone does not require it to do, and which
+the label definition makes relevant through the flooring operation.</p>
+
+<p><b>Ensembling.</b> The final model is an ensemble of independently initialised replicates
+trained across several random seeds, averaged at the prediction stage. Cross-validation
+throughout uses Bemis–Murcko scaffold folds rather than random folds, so that model selection
+is never informed by scaffold memorisation — an important control here, because the training
+set contains congeneric series and the blind set is a screening collection.</p>
+
+<h2>3. Architecture B — gradient-boosted trees over stacked endpoint surfaces</h2>
+
+<p>The second family deliberately abandons a learned representation in favour of an explicit,
+high-dimensional feature table consumed by gradient-boosted decision trees. It is not included
+as a baseline; it wins one of the two isoforms outright and is a genuinely different inductive
+bias.</p>
+
+<p><b>Feature construction.</b> Three blocks are concatenated:</p>
+
+<ol>
+<li><b>Physicochemical descriptors</b> — the same computed property block used above.</li>
+<li><b>Substructure counts</b> — circular fingerprints in both a standard connectivity flavour
+and a pharmacophore-typed (feature-based) flavour, taken as <i>counts</i> rather than bits, plus
+a public structural key set. Counts are used because a boosted tree can split on multiplicity,
+which a binary bit vector destroys.</li>
+<li><b>Stacked endpoint surfaces</b> — described next, and the block that carries the model.</li>
+</ol>
+
+<p><b>Stacked out-of-fold surfaces, including unscored isoforms.</b> This is the most distinctive
+element of the second architecture. Rather than feeding only structure, we first fit separate
+regression models to each underlying potency surface — the TDI-condition potency, the direct
+potency, and the derived shift — for <i>all four</i> CYP isoforms present in the data, including
+CYP1A2 and CYP2C9, which the TDI track does not score. Each model's out-of-fold predictions
+become input features to the final per-isoform model.</p>
+
+<p>The rationale is mechanistic. Time-dependent inhibition arises from metabolic bioactivation
+to a reactive species, and a compound's susceptibility to oxidative bioactivation is largely a
+property of the molecule rather than of the particular isoform that performs the oxidation. The
+unscored isoforms therefore carry real information about the scored ones, on compounds for which
+no scored-isoform measurement exists. This proved correct and non-trivially so: in the final
+CYP2D6 model, the most informative feature after CYP2D6's own shift surface is the predicted
+<b>CYP1A2</b> shift — an endpoint that is never evaluated. Cross-isoform bioactivation transfer
+is a real and exploitable signal in this dataset.</p>
+
+<p class="note"><b>A negative result we consider worth reporting.</b> We added an explicit panel
+of SMARTS patterns for the classical mechanism-based-inactivation motifs — methylenedioxyphenyl,
+furan, thiophene, terminal acetylene, aniline, thiourea, hydrazine, cyclopropylamine, quinone and
+related groups — on the expectation that a tree model would split on them directly where a hashed
+fingerprint dilutes them across bits. They contributed essentially nothing: most carried zero
+split gain, the best ranked far below the structural and stacked blocks, and the panel as a whole
+accounted for around one percent of total model gain. Either the count-based fingerprint blocks
+already capture these motifs adequately, or time-dependent inhibition in this dataset is not
+driven by the textbook alert list. We record it so the experiment need not be repeated.</p>
+
+<h2>4. The conjunctive head for CYP3A4</h2>
+
+<p>Following from Section 1, CYP3A4 is modelled in both primary architectures as the conjunction
+the label actually is, rather than as a single surface. One head predicts the floored shift; a second, separate head predicts whether a
+direct-inhibition curve was fitted at all. The second head's output <b>gates</b> the first:
+a compound predicted not to yield a fittable direct curve is driven toward a negative call
+irrespective of its predicted shift, because the convention makes it negative by construction.</p>
+
+<p>A corollary we tested and acted on: the label identity also implies that a positive call
+<i>requires</i> the TDI-condition potency to exceed the activity floor plus the two-fold shift.
+A regression on TDI-condition potency can therefore be used as an independent veto, demoting
+predicted positives that cannot satisfy the arithmetic. We emphasise that this is a consequence
+of the label's definition rather than a learned heuristic, and the direction is one-way — it can
+only remove calls that the definition forbids, never add any.</p>
+
+<p>We also examined whether to model the conjunction <i>compositionally</i>, estimating the
+label as the product of the two heads' probabilities rather than estimating it directly with a
+gate. We did not adopt it. Being structurally correct about the label does not make a product of
+two noisy estimators better than one head trained on the conjunction directly: the two heads'
+errors multiply, and the direct estimator measurably outperformed the composed one. The
+decomposition is valuable as a diagnostic and as a gate; it is not a better estimator.</p>
+
+<h2>5. How the blend was created</h2>
+
+<p>The two architectures are combined <b>per endpoint</b>, in <b>rank space</b>, with weights
+selected out of fold. Three deliberate choices define the blend.</p>
+
+<p><b>(a) Rank space, not probability space.</b> The two families produce scores that are not on
+a common scale and not mutually calibrated — one is a regressed potency shift, the other a
+boosted-tree score over a sparse feature table, and the subsequent gating operations are not
+probability-preserving. Averaging them as probabilities would let the more confidently scaled
+model dominate for reasons unrelated to its accuracy. We therefore convert each model's output to
+within-isoform ranks and blend the ranks linearly. This is also the correct space for the
+objective: at a fixed number of positive calls, the evaluation metric depends only on the
+ordering of compounds, so the blend operates directly on the quantity that is scored.</p>
+
+<p><b>(b) Per-endpoint weights, because no family wins both isoforms.</b> The two architectures
+have genuinely different strengths here, and a single global weight would be wrong for one of
+them. On CYP3A4 the graph network is the stronger ranker and is kept as the majority component,
+with the tree model contributing a substantial minority weight. On CYP2D6 the ordering reverses:
+the shift-regression formulation on explicit features is the stronger component and carries most
+of the weight, with the graph network contributing the remainder. Weights were chosen on
+out-of-fold predictions over the scaffold folds and then frozen; we did not tune them against the
+public leaderboard.</p>
+
+<p><b>(c) A third family used as a filter, not as a predictor.</b> Beyond the two-model blend we
+trained an independent third family following a published protocol for CYP inhibition prediction:
+a grid of classical learners (random forest, support-vector machine, nearest neighbours and a
+shallow neural network) over a range of public fingerprint types, with per-fold model selection
+and class-rebalancing variants, retrained on the challenge's own data. Model selection within the
+grid chose a random forest over a single fingerprint block for both scored isoforms.</p>
+
+<p><b>This family deliberately does not use any of the reformulation described above.</b> It
+classifies the published binary label directly — no floored-shift regression, no
+curve-fittability head, no conjunctive gate, no stacked endpoint surfaces, and no physicochemical
+descriptor block. It is a plain binary classifier on a single substructure representation, and it
+is the only model we built that treats <code>is_TDI</code> as an annotation rather than as an
+arithmetic identity. Trained this way it is, unsurprisingly, a substantially weaker ranker than
+the blend, and we never submitted it as a standalone prediction.</p>
+
+<p>That weakness is precisely why it is useful. Because it shares neither the representation, nor
+the learner, nor the target formulation of either primary architecture, its errors are
+substantially decorrelated from theirs — it is wrong about different compounds. Positive calls
+are therefore retained only where the blend and this independent family agree in the upper region
+of their respective rankings. The effect is a purity filter rather than a ranking change: it
+removes calls on which two methodologically unrelated models disagree, and a weak-but-independent
+opinion is worth more in that role than a strong-but-correlated one. We note that the retention
+threshold is itself a tuned quantity and that we found it to sit at an interior optimum — both
+tightening and loosening it degraded the result, on both isoforms.</p>
+
+<h2>6. Choosing the operating point</h2>
+
+<p>Converting a ranking into binary calls requires a threshold, and the obvious approach — tune
+it on out-of-fold data — is wrong here, because the training set and the blind set have different
+class balances. The training collections are hit-enriched relative to a screening population, and
+substantially so for CYP2D6.</p>
+
+<p>The blind set's prevalence, however, is recoverable analytically. Every leaderboard entry
+reports accuracy, precision and recall over the same compound set, and those three quantities
+over-determine the positive rate:</p>
+
+<pre>prevalence = (1 - accuracy) / (1 - 2*recall + recall/precision)</pre>
+
+<p>Solved independently across the public entries, this converges tightly and consistently for
+both isoforms. We therefore reweight our out-of-fold predictions to the blind set's prevalence
+before selecting the call rate that maximises the evaluation metric, rather than carrying over a
+threshold tuned at the training prevalence.</p>
+
+<p>A bi-normal analysis of the metric clarifies what the resulting call rates mean. The optimal
+call rate is a function of ranking quality, not a universal constant: a strong ranker should call
+close to the prevalence, while a weak ranker should call well above it, and the optimum is flat
+over a wide range in between. This is worth stating because low call rates are sometimes assumed
+to be inherently correct; they are correct only in proportion to how well the ranking separates
+the classes.</p>
+
+<h2>7. Structure preparation</h2>
+
+<p>All training and test structures were prepared with Schrödinger LigPrep, generating low-energy
+conformers with protonation states assigned at physiological pH. LigPrep output was then audited
+for systematic protonation and bond-order artefacts, which were corrected by custom cheminformatics
+scripts applied in a fixed sequence: neutralisation of anionic sulfonamide nitrogen, of
+pyridinium-type aromatic nitrogen, of protonated morpholine nitrogen, and of protonated
+amidine/guanidine/iminium nitrogen; and repair of deprotonated phenols and of inverted amide bond
+orders. Permanently charged quaternary centres are left unchanged, as are genuinely basic sites
+elsewhere in a molecule carrying a corrected sp<sup>2</sup> nitrogen. Identical corrections are
+applied to training and test structures.</p>
+
+<h2>8. Summary of what is novel here</h2>
+
+<ol>
+<li><b>Label-identity-driven reformulation.</b> Recovering the exact arithmetic identity behind
+<code>is_TDI</code> and regressing the underlying continuous shift, rather than classifying the
+published binary.</li>
+<li><b>Explicit conjunctive modelling of CYP3A4</b>, with a curve-fittability head gating the
+shift head, and an arithmetic veto derived from the label definition rather than learned.</li>
+<li><b>Cross-isoform bioactivation transfer</b> through stacked out-of-fold potency surfaces from
+isoforms that the track does not score — which turn out to be among the most informative features
+available.</li>
+<li><b>Rank-space, per-endpoint blending</b> of two architectures with different inductive
+biases, operating directly in the space the metric scores.</li>
+<li><b>A deliberately weak, methodologically unrelated third model used as a consensus purity
+filter</b> rather than as a predictor — a plain binary classifier that keeps the un-reformulated
+label precisely so that its errors stay decorrelated from the primary architectures'.</li>
+<li><b>An operating point derived analytically from the public leaderboard's own published
+statistics</b>, correcting for the enrichment difference between the training and blind
+populations.</li>
+</ol>
+
+<h2>9. Software</h2>
+
+<p>Graph neural network: ChemProp. Gradient-boosted trees: LightGBM, with XGBoost used for the
+label-arithmetic veto regression. Classical consensus family: scikit-learn over public
+fingerprint descriptors. Cheminformatics throughout: RDKit. Structure preparation: Schrödinger
+LigPrep. Training was performed on a single GPU instance for the neural ensembles and on CPU for
+the tree models.</p>
+
+</body>
+</html>

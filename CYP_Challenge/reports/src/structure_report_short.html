@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>OpenADMET CYP Challenge — Structure Track Model Report (short)</title>
+<link rel="stylesheet" href="report.css">
+<style>
+/* Short-report overrides: same house style, compressed. */
+@page { margin: 14mm 15mm 13mm 15mm;
+  @bottom-center { content: counter(page) " / " counter(pages);
+    font-family: "DejaVu Sans", sans-serif; font-size: 7.5pt; color: #666; } }
+body { font-size: 8.8pt; line-height: 1.32; }
+h1 { font-size: 13.5pt; }
+h2 { font-size: 10.2pt; margin: 0.9em 0 0.35em 0; padding-top: 0.5em;
+     page-break-after: avoid; }
+p { margin: 0.35em 0; }
+table { font-size: 7.3pt; margin: 0.45em 0; table-layout: fixed; }
+th, td { padding: 2.4px 4px; word-wrap: break-word; hyphens: auto; }
+tr { page-break-inside: avoid; }
+code { hyphens: none; -webkit-hyphens: none; }
+.meta { margin: 0.5em 0 0 0; font-size: 8.4pt; }
+.meta p { margin: 0.12em 0; }
+</style>
+</head>
+<body>
+
+<h1>OpenADMET CYP Challenge — Structure Prediction Track<br>Model Description Report</h1>
+
+<div class="meta">
+<p><b>Submitted by:</b> Cheminfosolutions Ltd &nbsp;·&nbsp; <b>leaderboard alias:</b> Cheminfo</p>
+<p><b>Submission:</b> 20 CYP3A4 protein–ligand complexes predicted from ligand SMILES alone; one
+archive of flat <code>{Molecule_Name}.pdb</code> files, chain A protein, chain B haem, chain C
+ligand as residue <code>LIG</code></p>
+<p><b>Metrics:</b> LDDT-PLI (primary), BiSyRMSD (secondary), LDDT-LP (protein), with PoseBusters
+as a validity gate</p>
+</div>
+
+<h2 class="first">1. Methods</h2>
+
+<p>No receptor structure is provided, so each complex is produced from sequence and SMILES. Two
+pose sources were built — co-folding and ensemble docking into the co-folded receptors — and the
+submitted archives draw from both.</p>
+
+<table>
+<colgroup>
+<col style="width:16%"><col style="width:30%"><col style="width:29%"><col style="width:25%">
+</colgroup>
+<thead>
+<tr><th>Component</th><th>Method / configuration</th><th>Role</th><th>Reference</th></tr>
+</thead>
+<tbody>
+<tr>
+<td><b>Boltz-2 co-folding</b></td>
+<td>v2.2.1; UniProt P08684 canonical sequence, 503 residues, sequence and MSA only, no
+structural template; haem B as CCD <code>HEM</code> so atom names match the references; 24 soft
+distal pocket contacts at 8 Å, Cys442 excluded as proximal-face; steering potentials on;
+5 diffusion samples × 3 seeds × 20 ligands = 300 complexes</td>
+<td>Protein fold; non-chelator poses; receptor ensemble for docking</td>
+<td>Boltz-2 (Passaro et al., 2025 preprint); MIT</td>
+</tr>
+<tr>
+<td>MSA</td>
+<td>14,302 sequences, computed once and shared across every ligand and seed</td>
+<td>Input to co-folding</td>
+<td>ColabFold MSA server (Mirdita et al., <i>Nat. Methods</i> <b>2022</b>, 19, 679–682)</td>
+</tr>
+<tr>
+<td><b>gnina ensemble docking</b></td>
+<td>v1.3.3; the 300 co-folded complexes stripped to protein + haem as a receptor ensemble;
+identical 24 Å box in every frame, centred 7.0 Å along the haem distal normal; <code>--cnn_scoring
+rescore --num_modes 9 --exhaustiveness 8 --seed 42</code>; 6,000 runs → 50,509 poses</td>
+<td>Submitted poses for the coordinating ligands</td>
+<td>McNutt et al., <i>J. Cheminform.</i> <b>2021</b>, 13, 43</td>
+</tr>
+<tr>
+<td><b>Covalent iron pin</b></td>
+<td>12 ligands with a coordinating nitrogen pinned to an axial site 2.10 Å along the distal haem
+normal, by per-ligand smallest rooted-environment SMARTS; 28,909 pinned poses retained,
+re-measured from written coordinates at 2.100 Å</td>
+<td>Haem-iron coordination</td>
+<td>gnina covalent mode (as above)</td>
+</tr>
+<tr>
+<td>Pose selection</td>
+<td>Rank-1 CNNaffinity with picks forced into distinct protein conformations (submitted
+archives). Also implemented: Boltz <code>ligand_iptm</code> arg-max, and haem-superposed medoid
+— the pose of lowest mean RMSD to all others</td>
+<td>One pose per ligand</td>
+<td>internal</td>
+</tr>
+<tr>
+<td>Validity repair</td>
+<td>PoseBusters 0.6.4 in <code>dock</code> mode used as the oracle: walk the
+CNNaffinity-ranked list in distinct receptors, export 12 candidates, run the gate over the
+batch, take the highest-scoring candidate that passes; a pinned pose is eligible only if its pin
+fired at 2.10 ± 0.25 Å</td>
+<td>Brings every archive to full validity</td>
+<td>Buttenschoen, Morris &amp; Deane, <i>Chem. Sci.</i> <b>2024</b>, 15, 3130–3139</td>
+</tr>
+<tr>
+<td>Support</td>
+<td>RDKit 2025.3.6 / 2025.9.6 (ligand handling, SMARTS, atom naming); gemmi 0.7.4 / 0.7.5
+(CIF and PDB I/O); MDAnalysis 2.9.0 (challenge validator)</td>
+<td>Archive construction and validation</td>
+<td>respective projects</td>
+</tr>
+</tbody>
+</table>
+
+<p><b>Hardware.</b> Co-folding on an NVIDIA Tesla T4 (16 GB) at one worker; docking on a local
+RTX 4060 at 16 workers, ~25 runs per minute free and ~3× that cost per pinned run. A
+503-residue complex with haem is ~4,100 atoms and needs 6–10 GB VRAM per worker.</p>
+
+<h2>2. Results</h2>
+
+<table>
+<colgroup><col style="width:13%"><col style="width:12%"><col style="width:40%"><col style="width:15%"><col style="width:20%"></colgroup>
+<thead>
+<tr><th>Archive</th><th>Date (UTC)</th><th>Method</th><th>PoseBusters</th><th>LDDT-PLI</th></tr>
+</thead>
+<tbody>
+<tr><td>seed1</td><td>2026-10-13</td><td>Co-folding, 1 seed, confidence pick</td><td>20 / 20</td><td>0.4106</td></tr>
+<tr><td>run2</td><td>2026-10-15</td><td>Co-folding, 3 constrained seeds, medoid pick</td><td>20 / 20</td><td>0.4137</td></tr>
+<tr><td>dock</td><td>2026-10-26</td><td>All gnina rank-1</td><td>15 / 20</td><td>0.3387</td></tr>
+<tr><td><b>clean20</b></td><td>2026-10-27</td><td><b>gnina rank-1 + 5 repaired poses</b></td><td><b>20 / 20</b></td><td><b>0.4300</b></td></tr>
+<tr><td>hybridH</td><td>2026-10-28</td><td>Co-folded run2 + clean20's 5 repairs</td><td>20 / 20</td><td>0.4111</td></tr>
+<tr><td>hybridHC</td><td>2026-10-28</td><td>clean20 chelators + co-folded non-chelators</td><td>20 / 20</td><td>0.4293</td></tr>
+<tr><td>geomfix</td><td>2026-11-02</td><td>clean20 with 2 geometry re-picks</td><td>20 / 20</td><td>0.3926</td></tr>
+</tbody>
+</table>
+
+<p>Haem-iron coordination, measured over the 10 ligands carrying a coordinating nitrogen:
+co-folded poses 2.83–2.87 Å, pinned docked poses 2.100 Å, organisers' baseline 2.00–2.14 Å.
+Mean ligand–iron distance after validity repair 2.970 Å, from 2.895 Å before. Archive checksums
+are not reproducible — a rebuild gives all twenty PDB files byte-identical but a different
+archive hash, as the format embeds modification times — so archives are retained as artefacts.</p>
+
+<h2>3. Ligand and receptor preparation</h2>
+
+<table>
+<colgroup><col style="width:22%"><col style="width:78%"></colgroup>
+<tbody>
+<tr><th>Ligand protonation</th><td>OpenBabel pH 7.4 model, SMARTS-audited per ionisable group;
+all twenty ligands neutral, confirmed two independent ways</td></tr>
+<tr><th>Protonation tool choice</th><td>dimorphite-dl not used: at pH 7.4 it returns protonated
+amide, urea and sulfonamide nitrogens and a net +3 charge on one ligand</td></tr>
+<tr><th>Coordinating-atom selection</th><td>Per-ligand smallest rooted-environment SMARTS. gnina
+pins the first atom of the first SMARTS match and cannot pin by index, so each pattern is rooted
+at the intended nitrogen</td></tr>
+<tr><th>Receptor</th><td>UniProt P08684 canonical sequence, 503 residues, with a
+14,302-sequence MSA and no structural template; haem B supplied as the CCD <code>HEM</code>
+entry</td></tr>
+<tr><th>Docking receptors</th><td>Each of the 300 co-folded complexes stripped to protein plus
+haem, its own ligand discarded</td></tr>
+<tr><th>Search box</th><td>Fixed identically in every frame rather than auto-boxed: a 24 Å cube
+centred 7.0 Å along the haem distal normal from the iron. Distal face identified in 300 of 300
+frames; the box encloses each frame's native ligand in 300 of 300</td></tr>
+<tr><th>Archive format</th><td>Flat <code>{Molecule_Name}.pdb</code> per ligand; chain A protein,
+chain B haem, chain C ligand as residue <code>LIG</code>; unique (chain, resid, icode) keys,
+atom names and atom serials throughout</td></tr>
+</tbody>
+</table>
+
+</body>
+</html>

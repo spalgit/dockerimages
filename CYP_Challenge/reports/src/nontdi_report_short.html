@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>OpenADMET CYP Challenge — Non-TDI Track Model Report (short)</title>
+<link rel="stylesheet" href="report.css">
+<style>
+/* Short-report overrides: same house style, compressed. */
+@page { margin: 14mm 15mm 13mm 15mm;
+  @bottom-center { content: counter(page) " / " counter(pages);
+    font-family: "DejaVu Sans", sans-serif; font-size: 7.5pt; color: #666; } }
+body { font-size: 8.8pt; line-height: 1.32; }
+h1 { font-size: 13.5pt; }
+h2 { font-size: 10.2pt; margin: 0.9em 0 0.35em 0; padding-top: 0.5em;
+     page-break-after: avoid; }
+p { margin: 0.35em 0; }
+table { font-size: 7.3pt; margin: 0.45em 0; table-layout: fixed; }
+th, td { padding: 2.4px 4px; word-wrap: break-word; hyphens: auto; }
+tr { page-break-inside: avoid; }
+code { hyphens: none; -webkit-hyphens: none; }
+.meta { margin: 0.5em 0 0 0; font-size: 8.4pt; }
+.meta p { margin: 0.12em 0; }
+</style>
+</head>
+<body>
+
+<h1>OpenADMET CYP Challenge — Inhibition Potency (Non-TDI) Track<br>Model Description Report</h1>
+
+<div class="meta">
+<p><b>Submitted by:</b> Cheminfosolutions Ltd &nbsp;·&nbsp; <b>leaderboard alias:</b> Cheminfo</p>
+<p><b>Predicted property:</b> pIC50 of direct inhibition for CYP1A2, CYP2C9, CYP2D6 and CYP3A4;
+blind set 750 compounds</p>
+<p><b>Metric:</b> ST-RAE (soft-threshold relative absolute error), macro-averaged over the four
+isoforms</p>
+<p><b>Training data:</b> challenge-distributed data only; no external corpus contributes to any
+submitted column</p>
+</div>
+
+<h2 class="first">1. Models</h2>
+
+<table>
+<colgroup>
+<col style="width:14%"><col style="width:28%"><col style="width:25%"><col style="width:21%"><col style="width:12%">
+</colgroup>
+<thead>
+<tr><th>Arm</th><th>Model / architecture</th><th>Molecular representation</th><th>Reference</th><th>In final file</th></tr>
+</thead>
+<tbody>
+<tr>
+<td><b>ChemProp 8-task</b></td>
+<td>D-MPNN trunk, 4 scored pIC50 heads (weight 1.0) + 4 auxiliary single-shot log2fc heads
+(weight 0.2); hidden 400, depth 4, 3-layer FFN, dropout 0.15, batch 128; 15-member ensemble =
+5 seeds × 3 split methods (random, stratified, scaffold); band loss α = 0.7; BoundedMSE
+censoring; predictions clipped to [1.5, 9.0]</td>
+<td>Learned bond-message graph embedding <b>+</b> RDKit 2D descriptor block concatenated at the
+FFN</td>
+<td>Heid et al., <i>J. Chem. Inf. Model.</i> <b>2024</b>, 64, 9–17; Yang et al., <i>ibid.</i>
+<b>2019</b>, 59, 3370–3388</td>
+<td>Yes — CYP2C9, CYP2D6</td>
+</tr>
+<tr>
+<td><b>Primary + proxy blend</b></td>
+<td>8-head model on real labels paired with a proxy model trained only on screened-but-never-
+fitted compounds, via a fold-internal single-dose → pIC50 calibration; per-isoform blend weight
+chosen out of fold; censoring at 4.305 and inverse credible-interval weighting</td>
+<td>as above</td>
+<td>as above</td>
+<td>Yes — CYP3A4</td>
+</tr>
+<tr>
+<td><b>Multi-member consensus</b></td>
+<td>23 members, equal weight, each z-scored within itself; members deduplicated by ranking at
+ρ ≥ 0.999; affinely placed</td>
+<td>member-dependent</td>
+<td>internal</td>
+<td>Yes — CYP1A2</td>
+</tr>
+<tr>
+<td>LightGBM</td>
+<td>Gradient-boosted trees; member of the CYP2C9 order-only rank perturbation</td>
+<td>RDKit descriptors + Morgan / FCFP counts + MACCS keys</td>
+<td>Ke et al., <i>NeurIPS</i> <b>2017</b>, 3146–3154</td>
+<td>Order only</td>
+</tr>
+<tr>
+<td>Published-protocol grid</td>
+<td>SVM / RF / kNN / ANN over PaDEL fingerprints, per the published CYP protocol, retrained on
+the challenge labels</td>
+<td>PaDEL fingerprints (AP2D, CDK, CDKExt, EState, GraphFP, MACCS, KRFP, PubChemFP, SubFP)</td>
+<td>Xu, Lu, Wu, Gui, Liu, Tang &amp; Li, <i>Mol. Pharmaceutics</i> <b>2023</b>, 20, 194–205</td>
+<td>Order only</td>
+</tr>
+<tr>
+<td>MLP</td>
+<td>Feed-forward network on the descriptor block; member of the CYP2C9 perturbation</td>
+<td>RDKit descriptors</td>
+<td>scikit-learn (Pedregosa et al., <i>JMLR</i> <b>2011</b>, 12, 2825–2830)</td>
+<td>Order only</td>
+</tr>
+<tr>
+<td>ChemProp, CheMeleon trunk</td>
+<td>Pretrained foundation D-MPNN, hidden 2048, depth 6, 8.7 M parameters, as an alternative
+trunk</td>
+<td>as ChemProp</td>
+<td>CheMeleon foundation weights distributed with ChemProp v2</td>
+<td>No</td>
+</tr>
+<tr>
+<td>XGBoost QSAR</td>
+<td>In-house boosted-tree QSAR arms built as CYP3A4 candidates</td>
+<td>RDKit PhysChem + RDK / AtomPair / Torsion / Morgan fingerprints</td>
+<td>Chen &amp; Guestrin, <i>KDD</i> <b>2016</b>, 785–794</td>
+<td>No</td>
+</tr>
+</tbody>
+</table>
+
+<p><b>Descriptors.</b> The neural arms concatenate the RDKit 2D physicochemical block (~200
+descriptors) to the learned graph embedding at the feed-forward layer; the tree and kernel arms
+use that block plus count-based Morgan and FCFP fingerprints and MACCS keys; the
+published-protocol arm uses PaDEL fingerprints as published. Non-finite columns and columns
+exceeding 1E10 are dropped before fitting. Software: ChemProp 2.2.3 with PyTorch Lightning,
+RDKit (Landrum, rdkit.org), PaDEL (Yap, <i>J. Comput. Chem.</i> <b>2011</b>, 32, 1466–1474),
+LightGBM, scikit-learn, Schrödinger LigPrep; training on an NVIDIA T4.</p>
+
+<p><b>Loss and selection.</b> ST-RAE charges nothing inside a compound's credible interval, so
+the training loss carries a matching band term per labelled cell, in scaled target space:
+<code>L = α·[relu(pred − (y+hi)) + relu((y−lo) − pred)] + (1−α)·(pred − y)²</code>, with α = 0.7
+and <code>hi</code>, <code>lo</code> that cell's own asymmetric half-widths. Arms were accepted
+per isoform on a fixed gate of mean error, 90th-percentile error and ranking against two
+baselines.</p>
+
+<h2>2. Results</h2>
+
+<table>
+<colgroup><col style="width:16%"><col style="width:12%"><col style="width:12%"><col style="width:12%"><col style="width:48%"></colgroup>
+<thead>
+<tr><th>Isoform</th><th>ST-RAE</th><th>Mean</th><th>SD</th><th>Submitted configuration, post-processing in order</th></tr>
+</thead>
+<tbody>
+<tr><td>CYP1A2</td><td><b>0.5090</b></td><td>4.4746</td><td>1.0779</td>
+<td>23-member z-score consensus → placed on recovered moments (4.32 / 1.39) → floor 3.1194</td></tr>
+<tr><td>CYP2C9</td><td><b>0.4265</b></td><td>4.8805</td><td>0.7977</td>
+<td>8-task band-loss ChemProp, tier-S pseudo-labels → floor 3.2130 → QSAR rank perturbation
+w = 0.10, quantile-mapped (order only)</td></tr>
+<tr><td>CYP2D6</td><td><b>0.5072</b></td><td>3.6979</td><td>0.8386</td>
+<td>8-task band-loss ChemProp, tier S (2,424 pseudo cells) → floor 3.1478 (440 rows)</td></tr>
+<tr><td>CYP3A4</td><td><b>0.5057</b></td><td>4.7967</td><td>0.9612</td>
+<td>Primary + proxy blend → floor 3.1079 (91 rows, pile held) → floor-held attenuation-matched
+narrowing, scale 0.9145 on the 659 rows above the floor</td></tr>
+<tr><td><b>Macro-average</b></td><td><b>0.4871</b></td><td>—</td><td>—</td>
+<td>750 rows, zero sub-floor predictions on any isoform; validated with the challenge's own
+activity validator</td></tr>
+</tbody>
+</table>
+
+<p>Board read 2026-11-02. Prediction floors are each isoform's minimum observed
+credible-interval upper bound; blind-set moments used for affine placement were recovered from
+the public leaderboard, with the scale target ρ·σ<sub>y</sub>.</p>
+
+<h2>3. Data, ligand preparation and labels</h2>
+
+<table>
+<colgroup><col style="width:30%"><col style="width:50%"><col style="width:20%"></colgroup>
+<thead><tr><th>Dataset</th><th>Role</th><th>Size</th></tr></thead>
+<tbody>
+<tr><td><code>TRAIN_inhibition</code></td><td>Dose–response pIC50, primary labels (CYP1A2 1,412 ·
+CYP2C9 1,285 · CYP2D6 1,493 · CYP3A4 2,335)</td><td>4,905 compounds</td></tr>
+<tr><td><code>single-concentration-TRAIN</code></td><td>Single-shot screen: auxiliary heads and
+pseudo-labelling</td><td>4,376 × 4 isoforms</td></tr>
+<tr><td><code>TEST-BLINDED</code></td><td>Blind prediction set</td><td>750 compounds</td></tr>
+</tbody>
+</table>
+
+<p><b>Ligand preparation</b>, applied identically to training and blind sets; the six RDKit
+corrections run in the order shown, through a single driver.</p>
+
+<table>
+<colgroup><col style="width:6%"><col style="width:30%"><col style="width:64%"></colgroup>
+<thead><tr><th>#</th><th>Step</th><th>Detail</th></tr></thead>
+<tbody>
+<tr><td>0</td><td>Schrödinger LigPrep</td><td>Preparation at pH 7.4</td></tr>
+<tr><td>1</td><td>Sulfonamide N</td><td>R-SO<sub>2</sub>-[N<sup>−</sup>]-R′ → R-SO<sub>2</sub>-NH-R′</td></tr>
+<tr><td>2</td><td>Pyridinium N</td><td>[nH<sup>+</sup>] → n; quaternary [n<sup>+</sup>] left unchanged</td></tr>
+<tr><td>3</td><td>Morpholine N</td><td>[NH<sup>+</sup>] → N (pK<sub>a</sub> ≈ 6.5, not dominant at pH 7.4)</td></tr>
+<tr><td>4</td><td>Iminium N</td><td>Amidine / guanidine / iminium C=[NH<sup>+</sup>] → C=N, sp<sup>2</sup> nitrogen only</td></tr>
+<tr><td>5</td><td>Amide</td><td><code>N=C([O-])</code> → <code>N-C(=O)</code>, bond orders corrected</td></tr>
+<tr><td>6</td><td>Phenol</td><td><code>c[O-]</code> → <code>c-OH</code></td></tr>
+<tr><td>7</td><td>Artefact fallback</td><td>Azolium, iminol, iminium and imine tautomers revert
+to the raw input SMILES. Net effect: 252 of 4,905 training rows and 52 of 750 test rows change;
+charged molecules 941 → 718 (train) and 128 → 80 (test)</td></tr>
+</tbody>
+</table>
+
+<p><b>Label interpretation.</b></p>
+
+<table>
+<colgroup><col style="width:24%"><col style="width:76%"></colgroup>
+<tbody>
+<tr><th>Censoring</th><td>Dose–response readings at or below the top screening concentration
+(pIC50 4.305) establish an upper bound only, and are left-censored under BoundedMSE</td></tr>
+<tr><th>Missingness</th><td>About one third of screened compounds received a curve; for CYP2D6
+the curves were run preferentially on apparent hits, so all 1,493 CYP2D6 labels are inhibitors
+while 2,883 inactive compounds carry an empty cell</td></tr>
+<tr><th>Pseudo-labels (tier S)</th><td>The curve-fitter's fallback value is a software floor,
+agreeing across isoforms to within 0.04 log units (1A2 2.168 · 2C9 2.333 · 2D6 2.168 · 3A4
+2.206). Each isoform's own floor is assigned to every compound in the clearly-inactive zone of
+the screen: 2,687 cells added, 2,424 of them CYP2D6 non-inhibitors, contamination 2.3%, mean
+error 0.168. CYP2D6 labels 1,493 → 3,917</td></tr>
+<tr><th>Pseudo-label treatment</th><td>Entered as point estimates, not censored bounds:
+censoring is enabled for real measurements and disabled for pseudo rows, with a hard abort if
+the CYP2D6 prediction standard deviation falls below 0.5</td></tr>
+<tr><th>External data</th><td>A 30,980-row union corpus was assembled and not used: ChEMBL CYP
+potency carries a +0.45–0.65 log offset and a hard floor at 4.00 against this assay. Where
+external data was used in development it was carried on separate heads, never merged into a
+scored target</td></tr>
+</tbody>
+</table>
+
+</body>
+</html>

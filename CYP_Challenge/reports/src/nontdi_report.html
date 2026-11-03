@@ -1,0 +1,299 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>OpenADMET CYP Challenge — Non-TDI Track Model Report</title>
+<link rel="stylesheet" href="report.css">
+</head>
+<body>
+
+<h1>OpenADMET CYP Challenge — Inhibition Potency (Non-TDI) Track<br>Model Description Report</h1>
+
+<div class="meta">
+<p><b>Team / leaderboard alias:</b> Cheminfo</p>
+<p><b>Submission:</b> blind test set, 750 compounds</p>
+<p><b>Predicted property:</b> pIC50 of direct inhibition, for CYP1A2, CYP2C9, CYP2D6 and CYP3A4</p>
+<p><b>Evaluation metric:</b> ST-RAE (soft-threshold relative absolute error), macro-averaged over the four isoforms</p>
+</div>
+
+<h2 class="first">1. The metric determines the model</h2>
+
+<p>ST-RAE is not an error metric in the usual sense, and every design decision below follows
+from its exact form:</p>
+
+<pre>soft_err_i     = max(0, y_i - conf_high_i) + max(0, conf_low_i - y_i)
+baseline_err_i = max(0, mean(y) - conf_high_i) + max(0, conf_low_i - mean(y))
+ST-RAE         = sum_i soft_err_i / sum_i baseline_err_i</pre>
+
+<p>A prediction falling inside the measured compound's credible interval
+<code>[conf_low, conf_high]</code> contributes <b>exactly zero</b>; outside it, only the distance
+to the nearer edge is charged. The denominator is the same quantity for the constant predictor
+<code>mean(y)</code>, so ST-RAE = 1.0 means "no better than predicting the mean". Two exact
+properties follow and were used throughout:</p>
+
+<ol>
+<li>The denominator does not depend on our predictions, so a change in ST-RAE is <b>exactly
+linear</b> in the change in total soft error. Every post-processing step below could therefore
+be sized arithmetically before submission rather than tuned.</li>
+<li>The derivative with respect to a uniform shift is a pure count,
+<code>#{ŷ &gt; hi} − #{ŷ &lt; lo}</code>.</li>
+</ol>
+
+<p>The band widths are strongly potency-dependent — for CYP3A4 the median band is 2.493 log
+units in the weakest quintile against <b>0.135</b> in the most potent, and for CYP1A2 1.369
+against 0.192. Tolerance is almost entirely at the weak end, so accuracy on potent compounds
+carries nearly all the cost.</p>
+
+<h2>2. Training data</h2>
+
+<p>Only challenge-distributed data is used in the submitted columns. No external corpus
+contributes to any live column.</p>
+
+<table>
+<tr><th>Dataset</th><th>Role</th><th>Size</th></tr>
+<tr><td><code>cyp-challenge-TRAIN_inhibition.csv</code></td><td>Dose–response pIC50, primary labels</td><td>4,905 compounds</td></tr>
+<tr><td><code>cyp-challenge-single-concentration-TRAIN.csv</code></td><td>Single-shot screen; auxiliary heads and pseudo-labelling</td><td>4,376 compounds × 4 isoforms</td></tr>
+<tr><td><code>cyp-challenge-TEST-BLINDED.csv</code></td><td>Blind prediction set</td><td>750 compounds</td></tr>
+</table>
+
+<p>Per-isoform dose–response label counts: CYP1A2 1,412 · CYP2C9 1,285 · CYP2D6 1,493 ·
+CYP3A4 2,335.</p>
+
+<p class="note"><b>External data was assembled and deliberately shelved.</b> A 30,980-row union
+corpus (6,141 challenge rows plus 24,839 external, carrying ChEMBL potency for 8,196–14,381
+compounds per isoform and NCATS qHTS maximum-response for 15,602) was built and trained. It is
+<b>not</b> in the submitted file. The reason is an endpoint mismatch rather than a data-quality
+one: ChEMBL CYP potency carries a +0.45–0.65 log offset and a hard floor at 4.00 against this
+assay, so merging it into the scored targets is a truncation rather than a censoring, and it
+moved the CYP3A4 training mean by +0.96 while cutting the weak end from 51% to 8% of rows.
+Where external data was used in development it was carried on <b>separate heads</b>, never
+merged into a scored target.</p>
+
+<h2>3. Structure preparation</h2>
+
+<p>Structures were prepared with <b>Schrödinger LigPrep</b> at <b>pH 7.4</b>, then audited for
+systematic protonation and bond-order artefacts and corrected by six RDKit scripts applied in a
+fixed order through a single driver, <code>clean_smiles_charges.py</code>. The driver executes
+only the function definitions from each script, carries molecules as RDKit objects with explicit
+hydrogens, and writes canonical SMILES to a new column. Structures LigPrep produced that could
+not be repaired locally (azolium, iminol, iminium and imine tautomers) fall back to the raw
+input SMILES.</p>
+
+<table>
+<tr><th>#</th><th>Script</th><th>Correction</th></tr>
+<tr><td>1</td><td><code>neutralize_sulfonamide_N.py</code></td><td>R-SO<sub>2</sub>-[N<sup>−</sup>]-R′ → R-SO<sub>2</sub>-NH-R′</td></tr>
+<tr><td>2</td><td><code>neutralize_nplus.py</code></td><td>Pyridinium-type [nH<sup>+</sup>] → n; quaternary [n<sup>+</sup>] left unchanged</td></tr>
+<tr><td>3</td><td><code>neutralize_morpholine_N.py</code></td><td>Morpholine [NH<sup>+</sup>] → N (pK<sub>a</sub> ≈ 6.5, not dominant at pH 7.4)</td></tr>
+<tr><td>4</td><td><code>neutralize_iminium_N.py</code></td><td>Amidine / guanidine / iminium C=[NH<sup>+</sup>] → C=N, sp<sup>2</sup> nitrogen only</td></tr>
+<tr><td>5</td><td><code>fix_amide.py</code></td><td>N=C([O<sup>−</sup>]) → N-C(=O) with corrected bond orders</td></tr>
+<tr><td>6</td><td><code>fix_phenol.py</code></td><td>c[O<sup>−</sup>] → c-OH</td></tr>
+</table>
+
+<p>The correction is material: 252 of 4,905 training rows and 52 of 750 test rows change, and
+the count of charged molecules falls from 941 to 718 in training and from 128 to 80 in the test
+set. Identical scripts are applied to both.</p>
+
+<h2>4. Model architecture and training</h2>
+
+<h3>4.1 Multitask ChemProp with single-shot auxiliary heads</h3>
+
+<p>A single ChemProp 2.2.3 D-MPNN trunk carries <b>eight regression heads</b>: the four scored
+<code>pIC50_direct_inhibition</code> endpoints at task weight 1.0, and four auxiliary
+single-shot <code>log2fc</code> heads at weight 0.2. RDKit 2-D descriptors are concatenated to
+the feed-forward network.</p>
+
+<table>
+<tr><th>Setting</th><th>Value</th></tr>
+<tr><td>Trunk</td><td>randomly initialised D-MPNN, hidden dimension 400, depth 4</td></tr>
+<tr><td>FFN</td><td>3 layers; hidden dimensions cycled over (800, 600, 800, 400, 800) across members</td></tr>
+<tr><td>Dropout / batch size</td><td>0.15 / 128</td></tr>
+<tr><td>Max epochs / patience</td><td>400 / 50</td></tr>
+<tr><td>Learning rate</td><td>1×10<sup>−4</sup> → 1×10<sup>−3</sup> → 1×10<sup>−4</sup>, 5 warm-up epochs</td></tr>
+<tr><td>Ensemble</td><td><b>15 members</b> = 5 seeds (42, 123, 456, 789, 1337) × 3 split methods (random, stratified, scaffold), validation fraction 0.12</td></tr>
+<tr><td>Censoring</td><td>dose–response readings at or below the top screening concentration (pIC50 4.305) are left-censored under <code>BoundedMSE</code></td></tr>
+<tr><td>Prediction clip</td><td>[1.5, 9.0]</td></tr>
+</table>
+
+<p>The stratified split is stratified jointly on which isoforms are labelled and on activity
+quartile; the scaffold split is a Bemis–Murcko whole-scaffold hold-out.</p>
+
+<p class="note"><b>A pretrained trunk was tested and rejected.</b> The CheMeleon foundation
+D-MPNN (hidden dimension 2048, depth 6, 8.7 M parameters) was trained as an alternative trunk.
+It wins on raw error but loses on ranking, and crossed with the band loss it read null-to-negative
+on all four isoforms. No submitted column uses it.</p>
+
+<h3>4.2 The band loss</h3>
+
+<p>Because ST-RAE charges nothing inside the credible interval, the training loss was changed to
+match. Per labelled cell, in scaled target space:</p>
+
+<pre>upper = y + hi
+lower = y - lo
+st    = relu(pred - upper) + relu(lower - pred)
+L     = alpha * st + (1 - alpha) * (pred - y)**2</pre>
+
+<p>where <code>hi</code> and <code>lo</code> are that cell's own credible-interval half-widths,
+carried asymmetrically because 8.6 / 7.8 / 14.5 / 27.5% of CYP1A2 / 2C9 / 2D6 / 3A4 rows have one
+side more than 1.5× the other. At <code>alpha = 1</code> this term <i>is</i> the ST-RAE
+numerator exactly; the retained 30% of mean-squared error exists because a pure hinge has zero
+gradient inside the band and so cannot order compounds that are already in it.</p>
+
+<p><b>α = 0.7</b> is used for every submitted band-loss column. The pure-hinge setting α = 1.0
+was subsequently run in full and <b>refused on all eight acceptance gates</b> (four isoforms ×
+two baselines), failing on the 90th-percentile error everywhere, so the parameter is settled at
+0.7. Censoring composes with the band: the bounded-loss clamp is applied to the prediction
+first, then the band. ChemProp 2.2.3's loss signature has no slot for a per-cell band, so the
+bands are carried in the widened target matrix.</p>
+
+<p>An alternative, inverse-band-width <i>sample weighting</i>, was measured and rejected: it is
+mathematically near-identical to 1/σ weighting (correlation 0.993–0.995 with band width).</p>
+
+<h3>4.3 The CYP3A4 column</h3>
+
+<p>CYP3A4 is served by an earlier, different architecture that no later run has beaten at the
+operating point. It pairs a primary 8-head model trained on real labels only with a
+<b>proxy model</b> trained only on compounds that were screened but never given a
+dose–response curve, using a fold-internal single-dose → pIC50 calibration. The final value is
+the primary model's, except where the proxy predicts weak activity, where the two are blended
+with a per-isoform weight chosen out of fold. Censoring at pIC50 4.305 and inverse
+credible-interval per-datapoint weighting are both applied. Twenty-two later local candidates
+were built to replace it and all twenty-two lost.</p>
+
+<h2>5. Pseudo-labelling the single-shot screen</h2>
+
+<p>Only about one third of screened compounds received a dose–response curve, and for CYP2D6 the
+curves were run preferentially on compounds that already looked like hits. All 1,493 CYP2D6
+pIC50 labels are therefore inhibitors, while 2,883 compounds that showed no activity have an
+empty cell — and the blind set is full of non-inhibitors. Training on the labelled subset alone
+places the whole CYP2D6 column far too potent.</p>
+
+<p>The fix exploits a property of the curve-fitting software rather than of the enzyme. When a
+compound genuinely does nothing, the fitter returns a fallback value, and those values cluster
+tightly and agree across isoforms to within 0.04 log units (CYP1A2 2.168 · CYP2C9 2.333 ·
+CYP2D6 2.168 · CYP3A4 2.206), which identifies them as a software floor. <b>Tier S</b> assigns
+each isoform's <i>own</i> floor value to every compound in the clearly-inactive zone of the
+single-shot screen — no fitted curve, no cross-isoform borrowing.</p>
+
+<table>
+<tr><th>Tier</th><th>Rule</th><th>Typical error</th><th>Used?</th></tr>
+<tr><td><b>S</b></td><td>Compound clearly did nothing → that isoform's floor value</td><td>0.15</td><td><b>Yes</b></td></tr>
+<tr><td>A</td><td>Isoform has its own nearby data → calibrated curve</td><td>0.17–0.47</td><td>No</td></tr>
+<tr><td>B</td><td>Borrowed from other isoforms</td><td>0.16–0.59</td><td>No</td></tr>
+<tr><td>C</td><td>No data anywhere → left empty</td><td>—</td><td>No</td></tr>
+</table>
+
+<p>Only tier S is used. Its contamination rate is 2.3% (one of 44 zone compounds that do have a
+real pIC50 sits above 3.0) with mean error 0.168, against 23% for the next tier down — ten times
+worse. In total <b>2,687 pseudo-label cells</b> are added, of which <b>2,424 are CYP2D6
+non-inhibitors</b>, taking CYP2D6 from 1,493 to 3,917 labels.</p>
+
+<p class="note"><b>The decisive detail: tier-S labels are point estimates, not censored upper
+bounds.</b> Real dose–response readings at or below pIC50 4.305 are left-censored, which is
+correct for a measurement that only establishes an upper bound. Applying the same treatment to
+2,424 pseudo-labels all sitting at 2.168 would make "predict anything below 2.168" free, and with
+no gradient under the bound the cheapest joint solution is a constant — the CYP2D6 head
+collapses. Censoring is therefore enabled for real measurements and disabled for pseudo rows,
+and a hard abort guard fires if the CYP2D6 prediction standard deviation falls below 0.5. This
+is not a hypothetical failure mode: another entrant fed roughly 2,900 CYP2D6 non-inhibitors in as
+censored labels and watched σ collapse to 0.07.</p>
+
+<p>Independent corroboration: moments recovered from the public leaderboard put the blind CYP2D6
+mean at 3.11 with standard deviation 1.51; the pseudo-labels, built only from laboratory data,
+move the CYP2D6 training mean from 4.78 to 3.165 with standard deviation 1.391. Live, tier S
+took CYP2D6 ST-RAE from 0.7754 to 0.5806 and rank 45 to 19.</p>
+
+<h2>6. Post-processing</h2>
+
+<h3>6.1 The prediction floor</h3>
+
+<p>No compound on any isoform has a credible-interval upper bound below 3.10. A prediction below
+that is therefore <b>strictly dominated</b>: it can never earn band credit and can only lose it.
+Each column is floored at that isoform's minimum observed upper bound.</p>
+
+<table>
+<tr><th>Isoform</th><th>Floor</th><th>Predictions raised</th><th>Mass moved (log units)</th></tr>
+<tr><td>CYP1A2</td><td>3.1194</td><td>57</td><td>23.6</td></tr>
+<tr><td>CYP2C9</td><td>3.2130</td><td>34</td><td>15.3</td></tr>
+<tr><td>CYP2D6</td><td>3.1478</td><td><b>440</b></td><td><b>293.1</b></td></tr>
+<tr><td>CYP3A4</td><td>3.1079</td><td>91</td><td>42.9</td></tr>
+</table>
+
+<p>This is verified rather than argued: over the full cross product of every moved prediction
+against every labelled band, the maximum increase in soft error is +0.000000. Live, the CYP3A4
+floor alone read −0.0176 against a pre-registered −0.010 to −0.018, and the CYP2D6 floor
+−0.0538 against a pre-registered −0.055. A standing audit now checks every column for sub-floor
+mass before submission, at a measured cost of 0.00041 ST-RAE per dominated log unit.</p>
+
+<h3>6.2 Affine placement and scaling</h3>
+
+<p>Predictions are placed on the blind-set moments recovered from the public leaderboard
+(CYP1A2 mean 4.32 / sd 1.39; CYP2C9 4.89 / 0.97; CYP3A4 4.74 / 1.15). The scale target is
+<b>ρ·σ<sub>y</sub></b>, where ρ is taken as √R² from the board — the attenuation-optimal
+scaling of a predictor of correlation ρ — <i>not</i> the recovered standard deviation itself,
+which would optimise calibration of spread rather than error. Three live probes establish the
+rule:</p>
+
+<table>
+<tr><th>Probe</th><th>% of ρ·σ, before → after</th><th>Live Δ ST-RAE</th></tr>
+<tr><td>CYP1A2 widen, step 1</td><td>81% → 100.7%</td><td><b>−0.0080 won</b></td></tr>
+<tr><td>CYP1A2 widen, step 2 (a = 1.20)</td><td>100.7% → 120.9%</td><td>+0.0408 lost</td></tr>
+<tr><td>CYP3A4 widen (a = 1.20)</td><td>109% → 131.2%</td><td>+0.0601 lost</td></tr>
+</table>
+
+<p><b>Narrowing interacts with the floor and must be constructed around it.</b> A pure affine
+narrowing of CYP3A4 to 100% of ρ·σ lifts the 91-compound floor pile from 3.1079 to 3.2524 —
+above the ≈3.15 band ceiling — converting previously free predictions into charged error at a
+modelled cost of +0.0054. The submitted construction instead <b>holds the pile at the floor</b>
+and rescales only the 659 compounds above it, re-solving the scale and offset from the full-column
+mean and standard deviation constraints. Because the pile is a tied block at the column minimum,
+holding it preserves ordering exactly (Spearman 1.000000), keeping the change a pure placement
+probe.</p>
+
+<h3>6.3 Order-only refinements</h3>
+
+<p>CYP2C9 additionally carries a QSAR rank perturbation: the live ChemProp ranking is mixed at
+weight 0.10 with the mean rank of a LightGBM model, a PaDEL/SVM model following Xu's protocol,
+and an MLP, then quantile-mapped back onto the live column's own empirical distribution, so only
+the ordering moves. CYP1A2 is a 23-member equal-weight consensus in which each member's blind
+column is z-scored within itself before averaging, members are deduplicated by ranking at
+ρ ≥ 0.999, and the result is affinely placed.</p>
+
+<h2>7. Final per-isoform configuration</h2>
+
+<table>
+<tr><th>Isoform</th><th>Model source</th><th>Post-processing, in order</th></tr>
+<tr><td><b>CYP1A2</b></td><td>23-member z-score consensus, blind-marginal arm</td><td>Placed on recovered moments (4.32 / 1.39) → floor 3.1194. No further affine.</td></tr>
+<tr><td><b>CYP2C9</b></td><td>8-task band-loss ChemProp, tier S, α = 0.7</td><td>Floor 3.2130 → QSAR rank perturbation w = 0.10, quantile-mapped (order only)</td></tr>
+<tr><td><b>CYP2D6</b></td><td>8-task band-loss ChemProp, tier S (2,424 pseudo cells), α = 0.7</td><td>Floor 3.1478 (440 rows). Held unchanged thereafter.</td></tr>
+<tr><td><b>CYP3A4</b></td><td>Primary + proxy blend ensemble (Section 4.3)</td><td>Floor 3.1079 (91 rows, pile held) → floor-held attenuation-matched narrowing, scale 0.9145 on the 659 above the floor, mean 4.7967, sd 0.9612 = 103.7% of ρ·σ</td></tr>
+</table>
+
+<h2>8. Submitted predictions and standing</h2>
+
+<p>The submitted file is <code>submission_3a4_narrow_floorheld_atten.csv</code>, 750 rows,
+validated with the challenge's own activity validator. Measured marginals: CYP1A2 4.4746 /
+1.0779 · CYP2C9 4.8805 / 0.7977 · CYP2D6 3.6979 / 0.8386 · CYP3A4 4.7967 / 0.9612, with zero
+sub-floor predictions on any isoform.</p>
+
+<table>
+<tr><th>Board</th><th>ST-RAE</th><th>Rank (field 273)</th></tr>
+<tr><td>CYP1A2</td><td>0.5090</td><td>61</td></tr>
+<tr><td>CYP2C9</td><td>0.4265</td><td>78</td></tr>
+<tr><td>CYP2D6</td><td>0.5072</td><td>27</td></tr>
+<tr><td>CYP3A4</td><td>0.5057</td><td>107</td></tr>
+<tr><td><b>Overall (MA-ST-RAE)</b></td><td><b>0.4871</b></td><td><b>63</b></td></tr>
+</table>
+
+<p>Read 2026-11-02. This is the best macro-average recorded on this track. The three unchanged
+isoform columns reproduced their previous scores to four decimal places, confirming that the
+CYP3A4 narrowing was the only variable in the entry.</p>
+
+<h2>9. Software</h2>
+
+<p>ChemProp 2.2.3 (D-MPNN, <code>BoundedMSE</code>, custom band-loss metric); PyTorch Lightning;
+RDKit (descriptors, scaffold splitting, standardisation, the six charge-correction scripts);
+LightGBM, scikit-learn and PaDEL-Descriptor for the QSAR rank-perturbation arm; Schrödinger
+LigPrep for structure preparation. Ensemble training was run on an NVIDIA T4 GPU instance.</p>
+
+</body>
+</html>

@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>OpenADMET CYP Challenge — Structure Track Model Report</title>
+<link rel="stylesheet" href="report.css">
+</head>
+<body>
+
+<h1>OpenADMET CYP Challenge — Structure Prediction Track<br>Model Description Report</h1>
+
+<div class="meta">
+<p><b>Team / leaderboard alias:</b> Cheminfo</p>
+<p><b>Submission:</b> 20 CYP3A4 protein–ligand complexes, predicted from ligand SMILES alone</p>
+<p><b>Format:</b> one archive of 20 flat <code>{Molecule_Name}.pdb</code> files; chain A protein, chain B haem, chain C ligand as residue <code>LIG</code></p>
+<p><b>Evaluation metrics:</b> LDDT-PLI (primary), BiSyRMSD (secondary), LDDT-LP (protein), with PoseBusters as a validity gate</p>
+</div>
+
+<h2 class="first">1. Task and scoring</h2>
+
+<p>Twenty blinded ligands — fifteen from the training set, two from the blinded 750-compound
+test set, three additional compounds — are to be placed in CYP3A4, with twenty novel UCSF
+cryo-EM structures as the blinded reference. No receptor structure is provided; the complex must
+be produced from sequence and SMILES.</p>
+
+<p>Two properties of the scoring shaped the whole approach:</p>
+
+<ol>
+<li><b>PoseBusters is a zero-score gate, not a penalty.</b> A structure that fails validity scores
+LDDT-PLI 0 for that ligand, not a reduced score. A structure that the scorer cannot map — duplicate
+<code>(chain, resid, icode)</code> keys, duplicate atom names within a residue, duplicate atom
+serials — scores 0 <i>and</i> takes a 20 Å BiSyRMSD penalty. One invalid pose therefore costs
+5% of the primary metric outright.</li>
+<li><b>The objective separates into twenty independent arg-maxes.</b> LDDT-PLI is a per-ligand
+mean and the validity zero is per-ligand, so there is no combinatorial pose-selection problem —
+each ligand can be optimised alone.</li>
+</ol>
+
+<p>This was measured, not assumed. Two submissions differing in exactly five files invert to
+give 0.322 mean LDDT-PLI for the fifteen shared poses and 0.754 for the five replaced ones — a
+spread only consistent with invalid structures scoring zero.</p>
+
+<h2>2. Pose generation</h2>
+
+<p>Two independent pose sources were built, and the submitted archives are hybrids of them.</p>
+
+<h3>2.1 Boltz-2 co-folding</h3>
+
+<table>
+<tr><th>Setting</th><th>Value</th></tr>
+<tr><td>Model</td><td>Boltz-2, version 2.2.1</td></tr>
+<tr><td>Protein specification</td><td>UniProt P08684 canonical sequence, 503 residues — sequence and MSA only, <b>no structural template</b></td></tr>
+<tr><td>MSA</td><td>14,302 sequences, computed once with the ColabFold MSA server and shared across every ligand and seed</td></tr>
+<tr><td>Cofactor</td><td>Haem B supplied as CCD entry <code>HEM</code>, so atom names match the references</td></tr>
+<tr><td>Pocket restraint</td><td>24 distal (substrate-side) residue contacts, soft (<code>force: false</code>), 8 Å. Cys442 deliberately excluded as proximal-face</td></tr>
+<tr><td>Sampling</td><td>5 diffusion samples per seed × 3 seeds × 20 ligands = <b>300 complexes</b></td></tr>
+<tr><td>Steering potentials</td><td>Enabled, which keeps bond lengths and clashes inside PoseBusters tolerances</td></tr>
+</table>
+
+<h3>2.2 gnina ensemble docking</h3>
+
+<p>The 300 Boltz complexes were stripped to protein plus haem — each one's own ligand discarded —
+and used as a receptor ensemble. The search box is <b>identical in every frame</b>: a 24 Å cube
+centred 7.0 Å along the haem distal normal from the iron, rather than auto-boxed, so scores are
+comparable across frames. The distal face was correctly identified in 300 of 300 frames and the
+box encloses each frame's native ligand in 300 of 300.</p>
+
+<p>Ligands were protonated for pH 7.4 using OpenBabel's pH model, SMARTS-audited per ionisable
+group; all twenty are neutral, confirmed two independent ways. <code>dimorphite-dl</code> was
+evaluated and rejected — it returns protonated amide, urea and sulfonamide nitrogens and a net
++3 charge on one ligand at pH 7.4.</p>
+
+<p>Twelve ligands carrying a coordinating nitrogen were docked with a covalent pin to the haem
+iron; the remaining eight were free-docked. Both used
+<code>--cnn_scoring rescore --num_modes 9 --exhaustiveness 8 --seed 42</code>. In total 6,000
+docking runs produced 50,509 poses with no failures, of which 28,909 pinned poses were retained.</p>
+
+<h2>3. Iron coordination — the central problem</h2>
+
+<p>The diagnosis that drove the method: <b>Boltz systematically fails to coordinate the haem
+iron.</b> Ten of the twenty ligands carry a coordinating nitrogen and sit at an iron distance of
+2.83–2.87 Å — a spike, not a distribution, with all ten inside 0.04 Å of each other — where a
+real azole or pyridine to Fe(III) bond is 2.0–2.2 Å. The organisers' own baseline places the same
+ten at 2.00–2.14 Å. A SMARTS audit separates the set perfectly: ten close with a coordinating
+nitrogen, zero close without one.</p>
+
+<p>A forced Fe–N distance restraint was written into the Boltz input at a 2.2 Å target and
+<b>did not achieve it</b>. Across 150 constrained diffusion samples every single one landed in
+2.83–2.88 Å. The constraint is nevertheless not a no-op — a ligand starting at 5.28 Å was pulled
+to 2.83–2.87 Å, a 2.4 Å move — so 2.83 Å is best understood as a <b>learned floor</b> in the
+model, and Boltz exposes no constraint-strength parameter with which to push past it.</p>
+
+<p>The route that worked was a different sampler. gnina's covalent docking mode pins a named
+ligand atom to a fixed point: the iron position as receptor atom, and an axial site 2.10 Å along
+the distal haem normal as the target position. This achieved <b>exactly 2.100 Å on 100% of all
+28,909 pinned poses</b>, verified by re-measuring written coordinates rather than trusting exit
+codes.</p>
+
+<p class="note"><b>The pin mechanism has a trap worth documenting.</b> gnina cannot pin by atom
+index — it pins the first atom of the first SMARTS match. An unrooted pattern therefore pins a
+<i>carbon</i> to the iron. Each pattern must be rooted at the intended atom, and even a
+single-match generic pattern can select the wrong one: on one ligand a generic imidazole pattern
+picked the non-coordinating triazole nitrogen. The fix was a per-ligand smallest rooted
+environment SMARTS selecting exactly the intended atom.</p>
+
+<p>A second, finer defect was then identified: the pin fixes distance and axial tilt by
+construction but <b>not orientation</b>. Two ligands have the iron roughly 30° out of the
+coordinating ring plane — toward the π face rather than along the nitrogen lone pair — which is
+not σ coordination. Distance alone is not coordination, and PoseBusters does not detect this: it
+passes all thirteen distorted-ring Boltz poses. It is a validity gate with generous tolerances,
+never a quality measure.</p>
+
+<h2>4. Pose selection</h2>
+
+<p>Three selection rules were used, for different pose sources.</p>
+
+<table>
+<tr><th>Rule</th><th>Definition</th><th>Applied to</th></tr>
+<tr><td>Boltz confidence</td><td>Per-ligand arg-max of <code>ligand_iptm</code></td><td>First submission only</td></tr>
+<tr><td><b>Medoid</b></td><td>Per ligand, the pose with lowest mean RMSD to all other poses — the consensus. Poses superposed on the haem first, atom correspondence exact by name</td><td>Boltz-only archives</td></tr>
+<tr><td><b>Rank-1 CNNaffinity</b></td><td>gnina's CNN affinity head, with the exported picks forced to come from different protein conformations</td><td>All docked poses in the submitted archives</td></tr>
+</table>
+
+<p>The medoid replaced confidence ranking because confidence cannot discriminate between
+genuinely different poses: within-ligand <code>ligand_iptm</code> spread is a median of 0.0068
+while within-ligand geometric spread is 0.33–4.33 Å mean RMSD and up to 6.77 Å pairwise. On one
+seed the medoid changes 15 of 20 picks for a mean confidence cost of 0.0042.</p>
+
+<p class="note"><b>Two selection proxies that were tested and refuted.</b> First, ranking poses
+on RMSD to the organisers' baseline structures: it ranks the submission that gained +0.0913 and
+nineteen places as the <i>worst</i> candidate, and is not monotone with LDDT-PLI across pose
+sources. Second, selecting on docking score is close to adversarial for this target — Vina-family
+scoring treats iron as a generic atom, so a correct 2.1 Å coordination reads as a clash and the
+affinity head steers away from it. The gate that <i>did</i> hold is the simplest: the count of
+ligands with an Fe–N contact at or below 2.2 Å. An archive with eleven coordinating contacts read
+0.4300; one with four read 0.4111.</p>
+
+<h2>5. PoseBusters repair</h2>
+
+<p>Rather than guessing thresholds, PoseBusters itself is used as the oracle. For each failing
+ligand the pipeline walks down the CNNaffinity-ranked list of poses <i>in distinct receptors</i>,
+exports the first twelve candidates, runs the real gate over the batch, and takes the
+highest-scoring candidate that passes. A pinned pose is eligible only if its pin actually fired
+(2.10 ± 0.25 Å), so a repair can never be a pose that quietly lost axial coordination.</p>
+
+<p>A cheap distance screen was insufficient because PoseBusters scales its cutoff by the two
+atoms' van der Waals radii rather than using a flat distance, and it checks the porphyrin as an
+organic cofactor, which a blanket haem exemption lets through. Reaching full validity cost very
+little in coordination: mean ligand–iron distance moved from 2.895 to 2.970 Å.</p>
+
+<table>
+<tr><th>Archive</th><th>PoseBusters</th></tr>
+<tr><td>Organisers' Boltz-2 baseline</td><td>19 / 20</td></tr>
+<tr><td>All gnina rank-1</td><td>15 / 20</td></tr>
+<tr><td>Rank-2 substitution</td><td>16 / 20</td></tr>
+<tr><td>Targeted repair</td><td>17 / 20</td></tr>
+<tr><td><b>clean20 and all later archives</b></td><td><b>20 / 20</b></td></tr>
+</table>
+
+<h2>6. Submission history</h2>
+
+<table>
+<tr><th>Date (UTC)</th><th>Archive</th><th>Method</th><th>PB</th><th>LDDT-PLI</th><th>Rank</th></tr>
+<tr><td>2026-10-13</td><td>seed1</td><td>Boltz, 1 seed, confidence pick</td><td>20/20</td><td>0.4106</td><td>13 / 29</td></tr>
+<tr><td>2026-10-15</td><td>run2</td><td>Boltz, 3 constrained seeds, medoid pick</td><td>20/20</td><td>0.4137</td><td>20 / 36</td></tr>
+<tr><td>2026-10-26</td><td>dock</td><td>All gnina rank-1</td><td>15/20</td><td>0.3387</td><td>32 / 41</td></tr>
+<tr><td><b>2026-10-27</b></td><td><b>clean20</b></td><td>gnina rank-1 + 5 repaired poses</td><td><b>20/20</b></td><td><b>0.4300</b></td><td><b>13 / 41</b></td></tr>
+<tr><td>2026-10-28</td><td>hybridH</td><td>Boltz run2 + clean20's 5 repairs</td><td>20/20</td><td>0.4111</td><td>20 / 41</td></tr>
+<tr><td>2026-10-28</td><td>hybridHC</td><td>clean20 chelators + Boltz non-chelators</td><td>20/20</td><td>0.4293</td><td>17 / 41</td></tr>
+<tr><td>2026-11-02</td><td>geomfix</td><td>clean20 with 2 geometry re-picks</td><td>20/20</td><td>0.3926</td><td>28 / 48</td></tr>
+</table>
+
+<p>The method is best read off three of these. Moving from Boltz poses to validity-repaired
+docked poses (<code>run2</code> → <code>clean20</code>) gained +0.0163 and was the single largest
+improvement; it is entirely attributable to iron coordination, since the Boltz poses in
+<code>run2</code> sit at the 2.83 Å floor and the docked poses at 2.10 Å. Replacing the docked
+non-chelator poses with Boltz ones (<code>hybridHC</code>) read null at 0.4293, which localises
+the gain to the coordinating ligands specifically rather than to pose quality in general. The
+final entry is a two-ligand geometry re-pick probe that regressed and does not represent the
+method; <code>clean20</code> remains the best configuration on this track.</p>
+
+<p class="note"><b>Reproducibility note.</b> The archive checksum is not reproducible. A rebuild
+produces all twenty PDB files byte-identical, verified per member, but a different archive hash,
+because the format embeds modification times. Archives are therefore retained as artefacts rather
+than regenerated.</p>
+
+<h2>7. Software and hardware</h2>
+
+<table>
+<tr><th>Tool</th><th>Version</th><th>Role</th></tr>
+<tr><td>Boltz</td><td>2.2.1 (Boltz-2)</td><td>Co-folding of CYP3A4–ligand complexes</td></tr>
+<tr><td>gnina</td><td>1.3.3</td><td>Ensemble docking and covalent iron pinning</td></tr>
+<tr><td>PoseBusters</td><td>0.6.4</td><td>Validity gate (<code>dock</code> mode)</td></tr>
+<tr><td>RDKit</td><td>2025.3.6 / 2025.9.6</td><td>Ligand handling, SMARTS, atom naming</td></tr>
+<tr><td>gemmi</td><td>0.7.4 / 0.7.5</td><td>CIF and PDB input/output in the archive builder</td></tr>
+<tr><td>MDAnalysis</td><td>2.9.0</td><td>Challenge structure validator</td></tr>
+<tr><td>OpenBabel</td><td>—</td><td>pH 7.4 ligand protonation</td></tr>
+<tr><td>ColabFold MSA server</td><td>—</td><td>Protein multiple sequence alignment</td></tr>
+</table>
+
+<p>Boltz inference ran on an NVIDIA Tesla T4 (16 GB) cloud instance at one worker; free docking
+ran on a local RTX 4060 at 16 workers and roughly 25 runs per minute, and pinned docking, which
+costs about three times as much per run, on the same hardware. A 503-residue complex with haem is
+about 4,100 atoms and needs 6–10 GB of VRAM per worker.</p>
+
+</body>
+</html>
